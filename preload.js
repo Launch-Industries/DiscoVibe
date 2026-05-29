@@ -17,8 +17,9 @@ contextBridge.exposeInMainWorld('api', {
   // Save terminal output
   saveOutput: (name, text) => ipcRenderer.invoke('save-output', { name, text }),
 
-  // Companion browser
+  // Companion browser / folders
   pickFile: () => ipcRenderer.invoke('pick-file'),
+  pickFolder: () => ipcRenderer.invoke('pick-folder'),
 
   // Usage bar + first-launch installer
   runUsage: (command) => ipcRenderer.invoke('run-usage', { command }),

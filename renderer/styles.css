@@ -140,9 +140,9 @@ body.disco .brand-text { animation-duration: 4s; }
   gap: 6px; padding: 6px;
 }
 
-/* Dim inactive panes (toggle in Settings) */
-body.dim-inactive .pane:not(.focused) { filter: brightness(var(--dim-level, 0.5)) saturate(0.85); }
-body.dim-inactive .pane.focused { filter: none; }
+/* Dim inactive panes (toggle in Settings) — only the body, so the header
+   (name + control icons) stays readable and usable. */
+body.dim-inactive .pane:not(.focused) .pane-body { filter: brightness(var(--dim-level, 0.5)) saturate(0.85); }
 
 /* Stored / collapsed pane tray */
 #stored-tray {
@@ -258,12 +258,13 @@ body.dim-inactive .pane.focused { filter: none; }
 .pane-name.centered + .pane-spacer { flex: 0 0 0; }
 
 .pane-btn {
-  appearance: none; border: none; background: rgba(127,127,127,.16); color: inherit;
+  appearance: none; border: none; background: rgba(127,127,127,.18); color: inherit;
   display: inline-flex; align-items: center; justify-content: center;
-  width: 26px; height: 24px; border-radius: 6px; cursor: pointer; opacity: .92;
+  width: 26px; height: 24px; border-radius: 6px; cursor: pointer; opacity: 1;
   flex: 0 0 auto;
 }
-.pane-btn:hover { background: rgba(127,127,127,.30); }
+.pane-btn:hover { background: rgba(127,127,127,.34); }
+.pane-btn svg.lucide { width: 15px; height: 15px; stroke-width: 2.25; }
 .bell-toggle.off { opacity: .45; }
 .note-btn { position: relative; }
 .note-btn.has-note::after {

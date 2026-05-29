@@ -17,6 +17,9 @@ let globalFontSize = 13;    // terminal text size — global
 let globalFontFamily = '';  // set after FONTS defined (DEFAULT_FONT)
 let globalTitleCenter = false;
 
+// Out-of-the-box Claude usage command: sums today's tokens from ~/.claude logs via jq.
+const CLAUDE_USAGE_CMD = "find ~/.claude/projects -name '*.jsonl' -mtime -1 -print0 2>/dev/null | xargs -0 cat 2>/dev/null | jq -rs --arg d \"$(date +%Y-%m-%d)\" '[ .[] | select((.timestamp//\"\")[0:10]==$d) | (.message.usage // empty) | ((.input_tokens//0)+(.output_tokens//0)+(.cache_creation_input_tokens//0)+(.cache_read_input_tokens//0)) ] | add // 0 | \"Claude today: \" + (if .>=1000000000 then ((./100000000|floor)/10|tostring)+\"B\" elif .>=1000000 then ((./100000|floor)/10|tostring)+\"M\" elif .>=1000 then ((./1000)|floor|tostring)+\"K\" else tostring end) + \" tok\"'";
+
 const settings = {
   autoCollapse: true,
   autoCollapseMin: 30,
@@ -26,9 +29,11 @@ const settings = {
   disco: false,              // extra disco flair (rainbow frame, spinning ball)
   clickToMove: true,         // click in a pane to position the shell cursor
   autoName: false,           // AI-name terminals from their recent activity
-  usageEnabled: false,       // show a usage bar from a polled command
-  usageCommand: '',          // e.g. ccusage --json   (or any command that prints a %)
-  usageIntervalSec: 30
+  usageEnabled: true,        // show a usage bar from a polled command
+  usageCommand: CLAUDE_USAGE_CMD,
+  usageIntervalSec: 30,
+  projectsDir: '',           // new terminals open here (e.g. ~/Developer)
+  openInApp: true            // open clicked links in the pane's companion browser
 };
 
 // Optional AI clean-up of dictated speech (OpenAI-compatible endpoint, e.g. free Qwen on
@@ -225,6 +230,7 @@ function relayout() {
   }
   readoutEl.textContent = panes.length === 1 ? '1 pane'
     : `${panes.length} panes${stored.length ? ` · ${stored.length} stored` : ''}`;
+  renderIcons();
   requestAnimationFrame(() => panes.forEach(fitPane));
 }
 function fitPane(pane) {
@@ -343,7 +349,6 @@ function createPane(opts = {}) {
   });
   const fitAddon = new FitAddon.FitAddon();
   term.loadAddon(fitAddon);
-  if (window.WebLinksAddon) term.loadAddon(new WebLinksAddon.WebLinksAddon());
   term.open(termLayer);
 
   const pane = {
@@ -403,6 +408,15 @@ function createPane(opts = {}) {
     else { setTimeout(() => { fitPane(pane); term.focus(); }, 0); }
   };
   viewToggle.addEventListener('click', () => setWebMode(!pane.webMode));
+
+  // Links in terminal output: open in the companion browser (preference) or externally.
+  if (window.WebLinksAddon) {
+    term.loadAddon(new WebLinksAddon.WebLinksAddon((event, uri) => {
+      if (settings.openInApp) { loadWeb(uri); setWebMode(true); }
+      else window.open(uri, '_blank');
+    }));
+  }
+
   webUrlInput.value = pane.webUrl;
   webUrlInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') loadWeb(webUrlInput.value); });
   node.querySelector('.web-go').addEventListener('click', () => loadWeb(webUrlInput.value));
@@ -487,7 +501,7 @@ function createPane(opts = {}) {
 
   // Spawn the shell
   fitAddon.fit();
-  window.api.spawn({ id, cols: term.cols || 80, rows: term.rows || 24 }).then((res) => {
+  window.api.spawn({ id, cols: term.cols || 80, rows: term.rows || 24, cwd: settings.projectsDir || undefined }).then((res) => {
     if (!res || !res.ok) term.writeln('\x1b[31mFailed to start shell: ' + (res && res.error ? res.error : 'unknown') + '\x1b[0m');
   });
 
@@ -682,6 +696,29 @@ function stepperRow(labelText, getVal, onMinus, onPlus) {
   row.append(span, step);
   return row;
 }
+function checkRow(label, getChecked, onChange) {
+  const row = document.createElement('label'); row.className = 'pop-row checkbox';
+  const sp = document.createElement('span'); sp.textContent = label;
+  const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = getChecked();
+  cb.addEventListener('change', () => onChange(cb.checked));
+  row.append(sp, cb); return row;
+}
+function textRow(label, get, set, placeholder, type, withPick) {
+  const row = document.createElement('div'); row.className = 'pop-row';
+  const sp = document.createElement('span'); sp.textContent = label;
+  const inp = document.createElement('input');
+  inp.type = type || 'text'; inp.value = get() || ''; inp.spellcheck = false; if (placeholder) inp.placeholder = placeholder;
+  inp.style.cssText = 'flex:1 1 auto;max-width:150px;background:var(--btn-bg);color:inherit;border:1px solid var(--pop-line);border-radius:6px;padding:4px 6px;font-size:12px';
+  inp.addEventListener('change', () => set(inp.value.trim()));
+  row.append(sp, inp);
+  if (withPick) {
+    const pick = document.createElement('button'); pick.className = 'web-btn'; pick.title = 'Choose folder…'; pick.innerHTML = lic('folder-open');
+    pick.addEventListener('click', async () => { const r = await window.api.pickFolder(); if (r && r.ok) { inp.value = r.path; set(r.path); } });
+    row.append(pick);
+  }
+  return row;
+}
+function settingsChanged() { applySettings(); saveGlobals(); window.api.broadcast({ type: 'settings', value: { ...settings } }); }
 
 function openNotePopover(pane, anchor) {
   const c = document.createElement('div');
@@ -773,150 +810,90 @@ function openColorPopover(pane, anchor) {
   openPopover(anchor, c);
 }
 
+// Quick settings popover — only the things people tweak often.
 function openGlobalSettings(anchor) {
   const c = document.createElement('div');
-  const title = document.createElement('div'); title.className = 'pop-title'; title.textContent = 'App settings';
+  const title = document.createElement('div'); title.className = 'pop-title'; title.textContent = 'Quick settings';
   c.appendChild(title);
 
-  // Auto-collapse
-  const acRow = document.createElement('label'); acRow.className = 'pop-row checkbox';
-  const acl = document.createElement('span'); acl.textContent = 'Auto-collapse idle';
-  const acb = document.createElement('input'); acb.type = 'checkbox'; acb.checked = settings.autoCollapse;
-  acb.addEventListener('change', () => { settings.autoCollapse = acb.checked; saveGlobals(); window.api.broadcast({ type: 'settings', value: { ...settings } }); });
-  acRow.append(acl, acb); c.appendChild(acRow);
+  c.appendChild(stepperRow('Title size', () => globalTitleSize + 'px',
+    () => applyGlobalTitleSize(globalTitleSize - 2), () => applyGlobalTitleSize(globalTitleSize + 2)));
+  c.appendChild(stepperRow('Text size', () => globalFontSize + 'px',
+    () => applyGlobalTextSize(globalFontSize - 1), () => applyGlobalTextSize(globalFontSize + 1)));
+  c.appendChild(checkRow('Center titles', () => globalTitleCenter, (v) => applyGlobalTitleCenter(v)));
+  c.appendChild(checkRow('Dim inactive', () => settings.dimInactive, (v) => { settings.dimInactive = v; settingsChanged(); }));
+  c.appendChild(stepperRow('Dim amount', () => Math.round((1 - settings.dimLevel) * 100) + '%',
+    () => { settings.dimLevel = Math.min(0.9, +(settings.dimLevel + 0.1).toFixed(2)); settingsChanged(); },
+    () => { settings.dimLevel = Math.max(0.1, +(settings.dimLevel - 0.1).toFixed(2)); settingsChanged(); }));
+  c.appendChild(checkRow('Disco mode ✨', () => settings.disco, (v) => { settings.disco = v; settingsChanged(); }));
 
-  c.appendChild(stepperRow('Idle minutes',
-    () => settings.autoCollapseMin + 'm',
-    () => { settings.autoCollapseMin = Math.max(1, settings.autoCollapseMin - 5); saveGlobals(); window.api.broadcast({ type: 'settings', value: { ...settings } }); },
-    () => { settings.autoCollapseMin = Math.min(600, settings.autoCollapseMin + 5); saveGlobals(); window.api.broadcast({ type: 'settings', value: { ...settings } }); }));
+  const more = document.createElement('button'); more.className = 'pop-custom'; more.style.marginTop = '10px';
+  more.innerHTML = lic('sliders-horizontal') + '<span>All preferences  (⌘,)</span>';
+  more.addEventListener('click', () => { closePopover(); openPreferences(); });
+  c.appendChild(more);
+  openPopover(anchor, c);
+}
 
-  // Dim inactive
-  const dimRow = document.createElement('label'); dimRow.className = 'pop-row checkbox';
-  const dl = document.createElement('span'); dl.textContent = 'Dim inactive terminals';
-  const db = document.createElement('input'); db.type = 'checkbox'; db.checked = settings.dimInactive;
-  db.addEventListener('change', () => { settings.dimInactive = db.checked; applySettings(); saveGlobals(); window.api.broadcast({ type: 'settings', value: { ...settings } }); });
-  dimRow.append(dl, db); c.appendChild(dimRow);
+// Full preferences — the set-and-forget configuration, in a modal.
+function openPreferences() {
+  if (document.getElementById('prefs')) return;
+  const ov = document.createElement('div'); ov.id = 'prefs';
+  const card = document.createElement('div'); card.className = 'ob-card'; card.style.maxWidth = '480px';
+  ov.appendChild(card);
+  ov.addEventListener('mousedown', (e) => { if (e.target === ov) ov.remove(); });
+  const head = document.createElement('div'); head.className = 'ob-head'; head.innerHTML = lic('sliders-horizontal') + ' Preferences';
+  card.appendChild(head);
+  const sec = (t) => { const d = document.createElement('div'); d.className = 'pop-title'; d.style.marginTop = '14px'; d.textContent = t; card.appendChild(d); };
 
-  const dimSync = () => { applySettings(); saveGlobals(); window.api.broadcast({ type: 'settings', value: { ...settings } }); };
-  c.appendChild(stepperRow('Dim amount',
-    () => Math.round((1 - settings.dimLevel) * 100) + '%',
-    () => { settings.dimLevel = Math.min(0.9, +(settings.dimLevel + 0.1).toFixed(2)); dimSync(); },   // less dim
-    () => { settings.dimLevel = Math.max(0.1, +(settings.dimLevel - 0.1).toFixed(2)); dimSync(); }));  // more dim
+  sec('Behavior');
+  card.appendChild(checkRow('Auto-collapse idle terminals', () => settings.autoCollapse, (v) => { settings.autoCollapse = v; settingsChanged(); }));
+  card.appendChild(stepperRow('Idle minutes', () => settings.autoCollapseMin + 'm',
+    () => { settings.autoCollapseMin = Math.max(1, settings.autoCollapseMin - 5); settingsChanged(); },
+    () => { settings.autoCollapseMin = Math.min(600, settings.autoCollapseMin + 5); settingsChanged(); }));
+  card.appendChild(checkRow('Click to place cursor', () => settings.clickToMove, (v) => { settings.clickToMove = v; settingsChanged(); }));
+  card.appendChild(checkRow('Switch panes with Tab (off = shell completion)', () => settings.tabSwitch, (v) => { settings.tabSwitch = v; settingsChanged(); }));
+  card.appendChild(checkRow('Auto-name terminals from activity (AI)', () => settings.autoName, (v) => { settings.autoName = v; settingsChanged(); }));
 
-  // Tab switching
-  const tabRow = document.createElement('label'); tabRow.className = 'pop-row checkbox';
-  const tl = document.createElement('span'); tl.textContent = 'Switch panes with Tab';
-  const tb = document.createElement('input'); tb.type = 'checkbox'; tb.checked = settings.tabSwitch;
-  tb.addEventListener('change', () => { settings.tabSwitch = tb.checked; saveGlobals(); window.api.broadcast({ type: 'settings', value: { ...settings } }); });
-  tabRow.append(tl, tb); c.appendChild(tabRow);
+  sec('Folders & links');
+  card.appendChild(textRow('Projects folder', () => settings.projectsDir, (v) => { settings.projectsDir = v; saveGlobals(); }, '~/Developer', 'text', true));
+  const fNote = document.createElement('div'); fNote.className = 'layout-empty';
+  fNote.textContent = 'New terminals open here. Tip: also add quick commands like “cd ~/Developer” for your Claude/Codex folders.';
+  card.appendChild(fNote);
+  card.appendChild(checkRow('Open links in the app browser (not Chrome)', () => settings.openInApp, (v) => { settings.openInApp = v; settingsChanged(); }));
 
-  // Click to position cursor
-  const ctmRow = document.createElement('label'); ctmRow.className = 'pop-row checkbox';
-  const ctl = document.createElement('span'); ctl.textContent = 'Click to place cursor';
-  const ctb = document.createElement('input'); ctb.type = 'checkbox'; ctb.checked = settings.clickToMove;
-  ctb.addEventListener('change', () => { settings.clickToMove = ctb.checked; saveGlobals(); window.api.broadcast({ type: 'settings', value: { ...settings } }); });
-  ctmRow.append(ctl, ctb); c.appendChild(ctmRow);
-
-  // Auto-name terminals from activity (uses the AI key below)
-  const anRow = document.createElement('label'); anRow.className = 'pop-row checkbox';
-  const anl = document.createElement('span'); anl.textContent = 'Auto-name from activity (AI)';
-  const anb = document.createElement('input'); anb.type = 'checkbox'; anb.checked = settings.autoName;
-  anb.addEventListener('change', () => { settings.autoName = anb.checked; saveGlobals(); window.api.broadcast({ type: 'settings', value: { ...settings } }); });
-  anRow.append(anl, anb); c.appendChild(anRow);
-
-  const discoRow = document.createElement('label'); discoRow.className = 'pop-row checkbox';
-  const disl = document.createElement('span'); disl.textContent = 'Disco mode ✨';
-  const disb = document.createElement('input'); disb.type = 'checkbox'; disb.checked = settings.disco;
-  disb.addEventListener('change', () => { settings.disco = disb.checked; applySettings(); saveGlobals(); window.api.broadcast({ type: 'settings', value: { ...settings } }); });
-  discoRow.append(disl, disb); c.appendChild(discoRow);
-
-  // Typography — all global, applied to every terminal
-  const typo = document.createElement('div'); typo.className = 'pop-title'; typo.style.marginTop = '10px';
-  typo.textContent = 'Typography (all terminals)';
-  c.appendChild(typo);
-
-  c.appendChild(stepperRow('Title size',
-    () => globalTitleSize + 'px',
-    () => applyGlobalTitleSize(globalTitleSize - 2),
-    () => applyGlobalTitleSize(globalTitleSize + 2)));
-
-  c.appendChild(stepperRow('Text size',
-    () => globalFontSize + 'px',
-    () => applyGlobalTextSize(globalFontSize - 1),
-    () => applyGlobalTextSize(globalFontSize + 1)));
-
-  const centerRow = document.createElement('label'); centerRow.className = 'pop-row checkbox';
-  const cl = document.createElement('span'); cl.textContent = 'Center titles';
-  const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = globalTitleCenter;
-  cb.addEventListener('change', () => applyGlobalTitleCenter(cb.checked));
-  centerRow.append(cl, cb); c.appendChild(centerRow);
-
-  const note = document.createElement('div'); note.className = 'layout-empty';
-  note.textContent = 'Ctrl+Tab always cycles panes. Tab option also disables shell completion while on.';
-  c.appendChild(note);
-
-  // --- Usage bar ---
-  const uTitle = document.createElement('div'); uTitle.className = 'pop-title'; uTitle.style.marginTop = '10px';
-  uTitle.textContent = 'Usage bar';
-  c.appendChild(uTitle);
-  const uRow = document.createElement('label'); uRow.className = 'pop-row checkbox';
-  const ul = document.createElement('span'); ul.textContent = 'Show usage bar';
-  const ub = document.createElement('input'); ub.type = 'checkbox'; ub.checked = settings.usageEnabled;
-  ub.addEventListener('change', () => { settings.usageEnabled = ub.checked; saveGlobals(); pollUsage(true); });
-  uRow.append(ul, ub); c.appendChild(uRow);
-  const ucRow = document.createElement('div'); ucRow.className = 'pop-row';
-  const ucl = document.createElement('span'); ucl.textContent = 'Command';
-  const uci = document.createElement('input'); uci.type = 'text'; uci.value = settings.usageCommand; uci.spellcheck = false; uci.placeholder = 'ccusage --json';
-  uci.style.cssText = 'flex:1 1 auto;max-width:150px;background:var(--btn-bg);color:inherit;border:1px solid var(--pop-line);border-radius:6px;padding:4px 6px;font-size:12px';
-  uci.addEventListener('change', () => { settings.usageCommand = uci.value.trim(); saveGlobals(); pollUsage(true); });
-  ucRow.append(ucl, uci); c.appendChild(ucRow);
-  c.appendChild(stepperRow('Refresh (sec)',
-    () => settings.usageIntervalSec + 's',
+  sec('Usage bar');
+  card.appendChild(checkRow('Show usage bar', () => settings.usageEnabled, (v) => { settings.usageEnabled = v; saveGlobals(); pollUsage(true); }));
+  card.appendChild(textRow('Command', () => settings.usageCommand, (v) => { settings.usageCommand = v; saveGlobals(); pollUsage(true); }, ''));
+  card.appendChild(stepperRow('Refresh (sec)', () => settings.usageIntervalSec + 's',
     () => { settings.usageIntervalSec = Math.max(5, settings.usageIntervalSec - 5); saveGlobals(); },
     () => { settings.usageIntervalSec = Math.min(600, settings.usageIntervalSec + 5); saveGlobals(); }));
   const uNote = document.createElement('div'); uNote.className = 'layout-empty';
-  uNote.textContent = 'Runs the command on an interval and shows its output (fills the bar from any “NN%”). For Claude usage try a tool like ccusage.';
-  c.appendChild(uNote);
+  uNote.textContent = 'Defaults to your live Claude token usage (today). Any “NN%” in the output fills the bar.';
+  card.appendChild(uNote);
 
-  // --- Voice (speech-to-text) ---
-  const mkInput = (labelText, key, type) => {
-    const row = document.createElement('div'); row.className = 'pop-row';
-    const sp = document.createElement('span'); sp.textContent = labelText;
-    const inp = document.createElement('input');
-    inp.type = type || 'text'; inp.value = voiceAI[key]; inp.spellcheck = false;
-    inp.style.flex = '1 1 auto'; inp.style.maxWidth = '150px';
-    inp.style.background = 'var(--btn-bg)'; inp.style.color = 'inherit';
-    inp.style.border = '1px solid var(--pop-line)'; inp.style.borderRadius = '6px';
-    inp.style.padding = '4px 6px'; inp.style.fontSize = '12px';
-    inp.addEventListener('change', () => { voiceAI[key] = inp.value.trim(); saveGlobals(); });
-    row.append(sp, inp); return row;
-  };
-
-  const vTitle = document.createElement('div'); vTitle.className = 'pop-title'; vTitle.style.marginTop = '10px';
-  vTitle.textContent = 'Voice (speech-to-text)';
-  c.appendChild(vTitle);
-
-  c.appendChild(mkInput('STT key', 'sttKey', 'password'));
-  c.appendChild(mkInput('STT model', 'sttModel', 'text'));
-  c.appendChild(mkInput('STT endpoint', 'sttUrl', 'text'));
+  sec('Voice (speech-to-text)');
+  card.appendChild(textRow('STT key', () => voiceAI.sttKey, (v) => { voiceAI.sttKey = v; saveGlobals(); }, '', 'password'));
+  card.appendChild(textRow('STT model', () => voiceAI.sttModel, (v) => { voiceAI.sttModel = v; saveGlobals(); }, ''));
+  card.appendChild(textRow('STT endpoint', () => voiceAI.sttUrl, (v) => { voiceAI.sttUrl = v; saveGlobals(); }, ''));
   const sNote = document.createElement('div'); sNote.className = 'layout-empty';
-  sNote.textContent = 'Voice records your mic then transcribes via this endpoint (default: free Groq Whisper — get a key at console.groq.com). Click the mic to record, click again to send.';
-  c.appendChild(sNote);
-
-  const vRow = document.createElement('label'); vRow.className = 'pop-row checkbox'; vRow.style.marginTop = '8px';
-  const vl = document.createElement('span'); vl.textContent = 'Also AI-clean into commands';
-  const vb = document.createElement('input'); vb.type = 'checkbox'; vb.checked = voiceAI.enabled;
-  vb.addEventListener('change', () => { voiceAI.enabled = vb.checked; saveGlobals(); });
-  vRow.append(vl, vb); c.appendChild(vRow);
-
-  c.appendChild(mkInput('API key', 'apiKey', 'password'));
-  c.appendChild(mkInput('Model', 'model', 'text'));
-  c.appendChild(mkInput('Endpoint', 'baseUrl', 'text'));
+  sNote.textContent = 'Click the mic to record, click again to send. Default = free Groq Whisper (console.groq.com).';
+  card.appendChild(sNote);
+  card.appendChild(checkRow('Also AI-clean speech into commands', () => voiceAI.enabled, (v) => { voiceAI.enabled = v; saveGlobals(); }));
+  card.appendChild(textRow('AI key', () => voiceAI.apiKey, (v) => { voiceAI.apiKey = v; saveGlobals(); }, '', 'password'));
+  card.appendChild(textRow('AI model', () => voiceAI.model, (v) => { voiceAI.model = v; saveGlobals(); }, ''));
+  card.appendChild(textRow('AI endpoint', () => voiceAI.baseUrl, (v) => { voiceAI.baseUrl = v; saveGlobals(); }, ''));
   const vNote = document.createElement('div'); vNote.className = 'layout-empty';
-  vNote.textContent = 'Free option: an OpenRouter key + a Qwen “:free” model. Off = type raw speech. Key is stored locally on this Mac.';
-  c.appendChild(vNote);
+  vNote.textContent = 'Same AI key powers auto-naming. Free option: OpenRouter + a Qwen “:free” model. Keys are stored locally on this Mac.';
+  card.appendChild(vNote);
 
-  openPopover(anchor, c);
+  const actions = document.createElement('div'); actions.className = 'ob-actions';
+  const spacer = document.createElement('span');
+  const done = document.createElement('button'); done.className = 'pop-custom'; done.style.flex = '0 0 auto'; done.textContent = 'Done';
+  done.addEventListener('click', () => ov.remove());
+  actions.append(spacer, done); card.appendChild(actions);
+
+  document.body.appendChild(ov);
+  renderIcons();
 }
 
 function openLayouts(anchor) {
@@ -1021,6 +998,59 @@ function reopenClosed(entry) {
   if (entry) { const i = list.findIndex((e) => e === entry); if (i >= 0) list.splice(i, 1); }
   saveClosed(list);
   addPane({ name: cfg.name, color: cfg.color, webUrl: cfg.webUrl });
+}
+
+// Clipboard history — remembers the last 10 things you copied.
+const CLIPS_KEY = 'tileterm.clips.v1';
+function loadClips() { try { return JSON.parse(localStorage.getItem(CLIPS_KEY)) || []; } catch (_) { return []; } }
+function saveClips(l) { try { localStorage.setItem(CLIPS_KEY, JSON.stringify(l.slice(0, 10))); } catch (_) {} }
+function pushClip(text) {
+  text = (text || '').trim(); if (!text) return;
+  const l = loadClips();
+  const i = l.indexOf(text); if (i >= 0) l.splice(i, 1);
+  l.unshift(text); saveClips(l);
+}
+document.addEventListener('copy', () => {
+  setTimeout(() => {
+    try {
+      const sel = (window.getSelection && window.getSelection().toString()) || '';
+      const fp = panes.find((p) => p.id === focusedId);
+      const t = sel || (fp && fp.term.hasSelection && fp.term.hasSelection() ? fp.term.getSelection() : '');
+      pushClip(t);
+    } catch (_) {}
+  }, 30);
+});
+function openClips(anchor) {
+  const c = document.createElement('div');
+  const title = document.createElement('div'); title.className = 'pop-title'; title.textContent = 'Clipboard history (last 10)';
+  c.appendChild(title);
+  const list = loadClips();
+  const listEl = document.createElement('div'); listEl.className = 'layout-list';
+  if (!list.length) {
+    const empty = document.createElement('div'); empty.className = 'layout-empty';
+    empty.textContent = 'Nothing copied yet. Copy text (⌘C) and it shows here.';
+    listEl.appendChild(empty);
+  } else {
+    list.forEach((clip, idx) => {
+      const row = document.createElement('div'); row.className = 'layout-row';
+      const paste = document.createElement('button'); paste.style.flex = '1 1 auto'; paste.style.justifyContent = 'flex-start';
+      const oneLine = clip.replace(/\s+/g, ' ').slice(0, 48);
+      paste.innerHTML = lic('clipboard') + `<span style="font-family:ui-monospace,Menlo,monospace">${oneLine.replace(/</g, '&lt;')}</span>`;
+      paste.title = 'Paste into focused terminal (and copy to clipboard)';
+      paste.addEventListener('click', () => {
+        const pane = panes.find((p) => p.id === focusedId) || panes[0];
+        if (pane) { window.api.input(pane.id, clip); pane.term.focus(); }
+        try { navigator.clipboard.writeText(clip); } catch (_) {}
+        closePopover();
+      });
+      const del = document.createElement('button'); del.innerHTML = lic('trash-2'); del.title = 'Remove';
+      del.addEventListener('click', () => { const l = loadClips(); l.splice(idx, 1); saveClips(l); openClips(anchor); });
+      row.append(paste, del);
+      listEl.appendChild(row);
+    });
+  }
+  c.appendChild(listEl);
+  openPopover(anchor, c);
 }
 
 const COMMANDS_KEY = 'tileterm.commands.v1';
@@ -1291,6 +1321,7 @@ document.getElementById('btn-add').addEventListener('click', () => addMany(readC
 addCountEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') addMany(readCount()); });
 document.getElementById('btn-tiles').addEventListener('click', (e) => openTilePicker(e.currentTarget));
 document.getElementById('btn-commands').addEventListener('click', (e) => openCommands(e.currentTarget));
+document.getElementById('btn-clips').addEventListener('click', (e) => openClips(e.currentTarget));
 themeBtn.addEventListener('click', () => applyThemeMode(themeMode === 'light' ? 'dark' : 'light'));
 muteBtn.addEventListener('click', () => setMute(!soundMuted));
 document.getElementById('btn-layouts').addEventListener('click', (e) => openLayouts(e.currentTarget));
@@ -1334,6 +1365,7 @@ window.api.onMenu((action) => {
   else if (action === 'toggle-mute') setMute(!soundMuted);
   else if (action === 'toggle-alerts') toggleAlerts();
   else if (action === 'save-output') saveFocusedOutput();
+  else if (action === 'open-prefs') openPreferences();
 });
 
 window.api.onBroadcast((p) => {

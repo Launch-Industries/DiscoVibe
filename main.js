@@ -79,13 +79,17 @@ ipcMain.handle('pty-spawn', (event, opts = {}) => {
   const { id, cols = 80, rows = 24, cwd, shell } = opts;
   const shellPath = shell || defaultShell();
 
+  let dir = (cwd || '').trim();
+  if (dir.startsWith('~')) dir = path.join(os.homedir(), dir.slice(1));
+  if (!dir || !fs.existsSync(dir)) dir = os.homedir();
+
   let proc;
   try {
     proc = pty.spawn(shellPath, [], {
       name: 'xterm-256color',
       cols,
       rows,
-      cwd: cwd || os.homedir(),
+      cwd: dir,
       env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' }
     });
   } catch (err) {
@@ -180,6 +184,16 @@ ipcMain.handle('pick-file', async (event) => {
   return { ok: true, path: filePaths[0] };
 });
 
+// Pick a folder (projects directory for new terminals).
+ipcMain.handle('pick-folder', async (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+    title: 'Choose your projects folder', properties: ['openDirectory', 'createDirectory']
+  });
+  if (canceled || !filePaths || !filePaths[0]) return { ok: false };
+  return { ok: true, path: filePaths[0] };
+});
+
 // Save a terminal's output to a file the user picks.
 ipcMain.handle('save-output', async (event, { name, text }) => {
   const win = BrowserWindow.fromWebContents(event.sender);
@@ -236,7 +250,18 @@ function sendToFocused(action) {
 
 function buildMenu() {
   const template = [
-    { role: 'appMenu' },
+    {
+      label: app.name,
+      submenu: [
+        { role: 'about' },
+        { type: 'separator' },
+        { label: 'Preferences…', accelerator: 'CmdOrCtrl+,', click: () => sendToFocused('open-prefs') },
+        { type: 'separator' },
+        { role: 'services' }, { type: 'separator' },
+        { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' },
+        { role: 'quit' }
+      ]
+    },
     {
       label: 'Terminal',
       submenu: [
