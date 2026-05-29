@@ -9,12 +9,22 @@ const panes = [];           // ordered list of pane objects
 let paneCounter = 0;        // monotonic id/name source
 let focusedId = null;
 let soundMuted = false;
+let themeMode = 'dark';                 // 'dark' | 'light'
+const DEFAULT_TITLE_SIZE = 20;          // px
+const MIN_TITLE_SIZE = 12;
+const MAX_TITLE_SIZE = 56;
 
-const PALETTE = [
+const DARK_PALETTE = [
   '#10131a', '#13303f', '#102a22', '#3a1f2b',
   '#2a2150', '#3a2e10', '#10222b', '#301630',
   '#243010', '#102a30', '#2b1840', '#3a1010'
 ];
+const LIGHT_PALETTE = [
+  '#f5f7fb', '#e3eefc', '#e6f7f1', '#fcebf0',
+  '#efeafc', '#fbf3e0', '#e8f5ec', '#f7e9f7',
+  '#eef6df', '#e2f3f7', '#f0e6fb', '#fde7e7'
+];
+function activePalette() { return themeMode === 'light' ? LIGHT_PALETTE : DARK_PALETTE; }
 
 const gridEl = document.getElementById('grid');
 const readoutEl = document.getElementById('layout-readout');
@@ -205,11 +215,24 @@ function applyColor(pane, color) {
   pane.bodyEl.style.background = color;
 }
 
+// Set a pane's title font size and grow the header to fit it.
+function applyTitleSize(pane, size) {
+  const s = Math.max(MIN_TITLE_SIZE, Math.min(MAX_TITLE_SIZE, Math.round(size)));
+  pane.titleSize = s;
+  pane.nameInput.style.fontSize = s + 'px';
+  const headerH = Math.max(34, Math.round(s * 1.6) + 8);
+  pane.headerEl.style.height = headerH + 'px';
+  pane.headerEl.style.flex = `0 0 ${headerH}px`;
+  // Header grew/shrank, so the terminal area changed — refit.
+  requestAnimationFrame(() => fitPane(pane));
+}
+
 function createPane(opts = {}) {
   paneCounter += 1;
   const id = `p${paneCounter}`;
   const name = opts.name || `Terminal ${paneCounter}`;
-  const color = opts.color || PALETTE[(paneCounter - 1) % PALETTE.length];
+  const palette = activePalette();
+  const color = opts.color || palette[(paneCounter - 1) % palette.length];
 
   const node = tpl.content.firstElementChild.cloneNode(true);
   const headerEl = node.querySelector('.pane-header');
@@ -218,6 +241,8 @@ function createPane(opts = {}) {
   const colorInput = node.querySelector('.color-input');
   const bellToggle = node.querySelector('.bell-toggle');
   const closeBtn = node.querySelector('.close-btn');
+  const smallerBtn = node.querySelector('.title-smaller');
+  const biggerBtn = node.querySelector('.title-bigger');
 
   nameInput.value = name;
 
@@ -241,10 +266,12 @@ function createPane(opts = {}) {
   const pane = {
     id, name, color, term, fitAddon,
     el: node, headerEl, bodyEl, nameInput, colorInput,
+    titleSize: opts.titleSize || DEFAULT_TITLE_SIZE,
     bellOn: true, attnTimer: null, chimeCount: 0
   };
   panes.push(pane);
   applyColor(pane, color);
+  applyTitleSize(pane, pane.titleSize);
 
   // ---- Wire the PTY ----
   term.onData((data) => window.api.input(id, data));
@@ -280,6 +307,9 @@ function createPane(opts = {}) {
     bellToggle.title = pane.bellOn ? 'Bell on for this pane' : 'Bell off for this pane';
     if (!pane.bellOn) clearAttention(pane);
   });
+
+  smallerBtn.addEventListener('click', () => applyTitleSize(pane, pane.titleSize - 2));
+  biggerBtn.addEventListener('click', () => applyTitleSize(pane, pane.titleSize + 2));
 
   closeBtn.addEventListener('click', () => closePane(id));
 
@@ -355,6 +385,16 @@ window.api.onExit(({ id }) => {
 // Toolbar + menu wiring
 // ---------------------------------------------------------------------------
 document.getElementById('btn-add').addEventListener('click', addPane);
+
+const themeBtn = document.getElementById('btn-theme');
+function applyThemeMode(mode) {
+  themeMode = mode;
+  document.body.classList.toggle('light', mode === 'light');
+  themeBtn.textContent = mode === 'light' ? '☀️ Light' : '🌙 Dark';
+}
+themeBtn.addEventListener('click', () => {
+  applyThemeMode(themeMode === 'light' ? 'dark' : 'light');
+});
 
 const muteBtn = document.getElementById('btn-mute');
 function refreshMuteBtn() {

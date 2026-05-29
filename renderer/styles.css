@@ -4,7 +4,27 @@
   --chrome-bg: #0b0e14;
   --chrome-fg: #e6e9ef;
   --chrome-line: #1d2230;
+  --chrome-tb-top: #11151f;
+  --chrome-tb-bot: #0b0e14;
+  --btn-bg: #161b27;
+  --btn-bg-hover: #1d2433;
+  --btn-line-hover: #2a3350;
+  --readout: #8a93a6;
   --accent: #5b9dff;
+}
+
+/* Light mode chrome (per-pane colors are still user-controlled) */
+body.light {
+  --chrome-bg: #eef1f6;
+  --chrome-fg: #1c2230;
+  --chrome-line: #d3d9e4;
+  --chrome-tb-top: #ffffff;
+  --chrome-tb-bot: #e9edf4;
+  --btn-bg: #ffffff;
+  --btn-bg-hover: #f0f3f8;
+  --btn-line-hover: #b9c2d4;
+  --readout: #66718a;
+  --accent: #2f6fe0;
 }
 
 * { box-sizing: border-box; }
@@ -28,7 +48,7 @@ html, body {
   align-items: center;
   justify-content: space-between;
   padding: 0 12px 0 84px; /* leave room for macOS traffic lights */
-  background: linear-gradient(180deg, #11151f, #0b0e14);
+  background: linear-gradient(180deg, var(--chrome-tb-top), var(--chrome-tb-bot));
   border-bottom: 1px solid var(--chrome-line);
   -webkit-app-region: drag; /* let the toolbar move the window */
 }
@@ -40,12 +60,12 @@ html, body {
 .tb-right { display: flex; align-items: center; gap: 8px; }
 
 .brand { font-weight: 700; letter-spacing: .3px; font-size: 14px; }
-.readout { font-size: 12px; color: #8a93a6; }
+.readout { font-size: 12px; color: var(--readout); }
 
 .tb-btn {
   appearance: none;
   border: 1px solid var(--chrome-line);
-  background: #161b27;
+  background: var(--btn-bg);
   color: var(--chrome-fg);
   font-size: 12px;
   font-weight: 600;
@@ -54,7 +74,7 @@ html, body {
   cursor: pointer;
   transition: background .12s ease, border-color .12s ease, transform .06s ease;
 }
-.tb-btn:hover { background: #1d2433; border-color: #2a3350; }
+.tb-btn:hover { background: var(--btn-bg-hover); border-color: var(--btn-line-hover); }
 .tb-btn:active { transform: translateY(1px); }
 .tb-btn.primary { background: var(--accent); border-color: var(--accent); color: #06101f; }
 .tb-btn.primary:hover { background: #6fa9ff; }
@@ -114,11 +134,13 @@ html, body {
   border: none;
   outline: none;
   color: inherit;
-  font: inherit;
+  font-family: inherit;
+  font-size: 20px;          /* default; per-pane adjustable with A− / A+ */
   font-weight: 800;
+  line-height: 1.1;
   letter-spacing: .3px;
   min-width: 40px;
-  max-width: 60%;
+  max-width: 72%;
   padding: 2px 4px;
   border-radius: 5px;
 }
