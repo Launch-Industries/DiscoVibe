@@ -96,11 +96,23 @@ const TILE_THEMES = {
   'Iceland':           ['#1a2a33', '#2c4a5a', '#3a6b7a', '#5a7a7a', '#0f1f26', '#4a6b6b', '#2e4a4a', '#dfe9ec'],
   'Ocean':             ['#012d4a', '#01497c', '#02639b', '#0a7fa8', '#013a63', '#155e75', '#0e4d64', '#003049'],
   'Sunlight':          ['#b5890a', '#d4a017', '#e8b923', '#f0c75e', '#caa42f', '#a87b00', '#dcae1d', '#9c7a10'],
-  'Aurora Borealis':   ['#04150f', '#0a2e1f', '#103a2e', '#1b5e4a', '#2a7d6a', '#1a4a5a', '#2e2a5a', '#0d1b3e']
+  'Aurora Borealis':   ['#04150f', '#0a2e1f', '#103a2e', '#1b5e4a', '#2a7d6a', '#1a4a5a', '#2e2a5a', '#0d1b3e'],
+  // Pride & heritage flags
+  'LGBTQ Pride':       ['#e40303', '#ff8c00', '#ffed00', '#008026', '#004dff', '#750787', '#e40303', '#008026'],
+  'Trans Pride':       ['#5bcefa', '#f5a9b8', '#ffffff', '#5bcefa', '#f5a9b8', '#ffffff', '#5bcefa', '#f5a9b8'],
+  'Black Pride':       ['#000000', '#e31b23', '#007a3d', '#000000', '#e31b23', '#007a3d', '#000000', '#e31b23'],
+  'Colombian':         ['#fcd116', '#003893', '#ce1126', '#fcd116', '#003893', '#ce1126', '#fcd116', '#003893'],
+  'Nigerian':          ['#008751', '#ffffff', '#008751', '#ffffff', '#008751', '#ffffff', '#008751', '#ffffff'],
+  'Mexican':           ['#006847', '#ffffff', '#ce1126', '#006847', '#ffffff', '#ce1126', '#006847', '#ce1126'],
+  'Philippine':        ['#0038a8', '#ce1126', '#ffffff', '#fcd116', '#0038a8', '#ce1126', '#ffffff', '#fcd116'],
+  'Canadian':          ['#d80621', '#ffffff', '#d80621', '#ffffff', '#d80621', '#ffffff', '#d80621', '#ffffff']
 };
 const THEME_ACCENTS = {
   'Galaxy': '#b86bd8', 'Pacific Northwest': '#3fb6a8', 'Desert': '#e0a060',
-  'Iceland': '#7ec8e3', 'Ocean': '#00b4d8', 'Sunlight': '#FFD100', 'Aurora Borealis': '#5cf0c0'
+  'Iceland': '#7ec8e3', 'Ocean': '#00b4d8', 'Sunlight': '#FFD100', 'Aurora Borealis': '#5cf0c0',
+  'LGBTQ Pride': '#cc44cc', 'Trans Pride': '#5bcefa', 'Black Pride': '#e31b23',
+  'Colombian': '#fcd116', 'Nigerian': '#008751', 'Mexican': '#006847',
+  'Philippine': '#0038a8', 'Canadian': '#d80621'
 };
 let tileTheme = '';   // '' = Auto (match dark/light mode)
 function activePalette() {
