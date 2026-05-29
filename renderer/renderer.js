@@ -624,8 +624,9 @@ function closePane(id, skipRecord) {
   pane.term.dispose();
   panes.splice(i, 1);
   // Closing the last pane (nothing active or stored) closes the window → quits the
-  // app when it's the last window. (Previously it spawned a fresh terminal.)
-  if (panes.length === 0 && stored.length === 0) { writeSession(); window.close(); return; }
+  // app when it's the last window. Clear this window's saved layout so reopening
+  // starts fresh (recently-closed via Cmd+Shift+T still recovers it).
+  if (panes.length === 0 && stored.length === 0) { try { localStorage.removeItem(SESSION_KEY); localStorage.removeItem(SESSION_KEY + ':bak'); } catch (_) {} window.close(); return; }
   if (focusedId === id && panes.length) setFocused(panes[Math.max(0, i - 1)].id);
   relayout();
   setTimeout(() => { const f = panes.find((p) => p.id === focusedId); if (f) f.term.focus(); }, 0);
@@ -712,7 +713,7 @@ function closeStored(pane, skipRecord) {
   pane.term.dispose();
   pane.el.remove();
   renderTray();
-  if (panes.length === 0 && stored.length === 0) { writeSession(); window.close(); return; }
+  if (panes.length === 0 && stored.length === 0) { try { localStorage.removeItem(SESSION_KEY); localStorage.removeItem(SESSION_KEY + ':bak'); } catch (_) {} window.close(); return; }
   scheduleSave();
 }
 
