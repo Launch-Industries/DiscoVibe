@@ -830,12 +830,12 @@ function updateModelBadge(pane) {
 setInterval(() => { for (const p of panes) updateModelBadge(p); }, 4000);
 
 let autoNameBusy = false;
-setInterval(async () => {
+async function autoNamePass(force) {
   if (!settings.autoName || !voiceAI.apiKey || autoNameBusy) return;
   autoNameBusy = true;
   for (const p of [...panes]) {
     const sig = p.term.buffer.active.length;
-    if (p._lastNameSig === sig) continue;       // no new output since last check
+    if (!force && p._lastNameSig === sig) continue;   // no new output since last check
     p._lastNameSig = sig;
     try {
       const suggestion = await aiSuggestName(p);
@@ -845,7 +845,18 @@ setInterval(async () => {
     } catch (_) {}
   }
   autoNameBusy = false;
-}, 45000);
+}
+setInterval(() => autoNamePass(false), 30000);
+
+// Auto-configure the AI endpoint + model from the key's prefix so pasting any
+// supported key "just works" without also editing the endpoint.
+function autoConfigAI(key) {
+  key = (key || '').trim();
+  if (key.startsWith('AIza')) { voiceAI.baseUrl = 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions'; voiceAI.model = 'gemini-2.0-flash'; }
+  else if (key.startsWith('sk-or-')) { voiceAI.baseUrl = 'https://openrouter.ai/api/v1/chat/completions'; voiceAI.model = 'qwen/qwen-2.5-coder-32b-instruct:free'; }
+  else if (key.startsWith('gsk_')) { voiceAI.baseUrl = 'https://api.groq.com/openai/v1/chat/completions'; voiceAI.model = 'llama-3.3-70b-versatile'; }
+  else if (key.startsWith('sk-')) { voiceAI.baseUrl = 'https://api.openai.com/v1/chat/completions'; voiceAI.model = 'gpt-4o-mini'; }
+}
 
 function openColorPopover(pane, anchor) {
   const c = document.createElement('div');
@@ -941,11 +952,11 @@ function openPreferences() {
   sNote.textContent = 'Click the mic to record, click again to send. Default = free Groq Whisper (console.groq.com).';
   card.appendChild(sNote);
   card.appendChild(checkRow('Also AI-clean speech into commands', () => voiceAI.enabled, (v) => { voiceAI.enabled = v; saveGlobals(); }));
-  card.appendChild(textRow('AI key', () => voiceAI.apiKey, (v) => { voiceAI.apiKey = v; saveGlobals(); }, '', 'password'));
+  card.appendChild(textRow('AI key', () => voiceAI.apiKey, (v) => { voiceAI.apiKey = v; autoConfigAI(v); saveGlobals(); if (settings.autoName) setTimeout(() => autoNamePass(true), 400); }, 'paste a key — endpoint auto-detected', 'password'));
   card.appendChild(textRow('AI model', () => voiceAI.model, (v) => { voiceAI.model = v; saveGlobals(); }, ''));
   card.appendChild(textRow('AI endpoint', () => voiceAI.baseUrl, (v) => { voiceAI.baseUrl = v; saveGlobals(); }, ''));
   const vNote = document.createElement('div'); vNote.className = 'layout-empty';
-  vNote.textContent = 'Same AI key powers auto-naming. Free option: OpenRouter + a Qwen “:free” model. Keys are stored locally on this Mac.';
+  vNote.textContent = 'Same AI key powers auto-naming (updates the header every ~30s). Paste a Gemini (AIza…), OpenRouter (sk-or-…), Groq (gsk_…) or OpenAI (sk-…) key — the endpoint sets itself. Stored locally on this Mac.';
   card.appendChild(vNote);
 
   const actions = document.createElement('div'); actions.className = 'ob-actions';
