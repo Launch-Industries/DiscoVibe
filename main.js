@@ -317,7 +317,20 @@ function span() {
   }
 }
 
+// Single-instance lock: a second launch must NOT run concurrently (two instances
+// racing the same saved-layout storage is what wiped windows). Focus the existing one.
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    const w = [...windows][0];
+    if (w && !w.isDestroyed()) { if (w.isMinimized()) w.restore(); w.show(); w.focus(); }
+  });
+}
+
 app.whenReady().then(() => {
+  if (!gotSingleInstanceLock) return;   // another instance owns the session; don't touch it
   // Allow microphone for voice mode (local, trusted app).
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
     callback(true);

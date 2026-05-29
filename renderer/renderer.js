@@ -623,8 +623,10 @@ function closePane(id, skipRecord) {
   window.api.kill(id);
   pane.term.dispose();
   panes.splice(i, 1);
-  if (panes.length === 0 && stored.length === 0) createPane();   // never fully empty
-  else if (focusedId === id && panes.length) setFocused(panes[Math.max(0, i - 1)].id);
+  // Closing the last pane (nothing active or stored) closes the window → quits the
+  // app when it's the last window. (Previously it spawned a fresh terminal.)
+  if (panes.length === 0 && stored.length === 0) { writeSession(); window.close(); return; }
+  if (focusedId === id && panes.length) setFocused(panes[Math.max(0, i - 1)].id);
   relayout();
   setTimeout(() => { const f = panes.find((p) => p.id === focusedId); if (f) f.term.focus(); }, 0);
   scheduleSave();
@@ -710,7 +712,7 @@ function closeStored(pane, skipRecord) {
   pane.term.dispose();
   pane.el.remove();
   renderTray();
-  if (panes.length === 0 && stored.length === 0) addPane();
+  if (panes.length === 0 && stored.length === 0) { writeSession(); window.close(); return; }
   scheduleSave();
 }
 
@@ -1265,21 +1267,25 @@ function saveGlobals() {
   try { localStorage.setItem(GLOBALS_KEY, JSON.stringify({ themeMode, globalTitleSize, globalFontSize, globalFontFamily, globalTitleCenter, soundMuted, settings, tileTheme, voiceAI })); } catch (_) {}
 }
 let saveTimer = null;
+function writeSession() {
+  try {
+    const data = serializePanes();
+    localStorage.setItem(SESSION_KEY, JSON.stringify({ panes: data }));
+    // Keep a backup of the last NON-EMPTY layout so an empty/failed state can't erase it.
+    if (data.length) localStorage.setItem(SESSION_KEY + ':bak', JSON.stringify({ panes: data }));
+  } catch (_) {}
+}
 function scheduleSave() {
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => { try { localStorage.setItem(SESSION_KEY, JSON.stringify({ panes: serializePanes() })); } catch (_) {} }, 400);
+  saveTimer = setTimeout(writeSession, 400);
 }
 function loadGlobals() { try { return JSON.parse(localStorage.getItem(GLOBALS_KEY)); } catch (_) { return null; } }
 function loadSession() {
-  try {
-    let s = JSON.parse(localStorage.getItem(SESSION_KEY));
-    // Migration: earlier builds saved the primary session under an un-suffixed key.
-    if ((!s || !s.panes || !s.panes.length) && WIN_KEY === 'primary') {
-      const old = JSON.parse(localStorage.getItem('tileterm.session.v1'));
-      if (old && old.panes && old.panes.length) s = old;
-    }
-    return s;
-  } catch (_) { return null; }
+  const tryKey = (k) => { try { const s = JSON.parse(localStorage.getItem(k)); return (s && Array.isArray(s.panes) && s.panes.length) ? s : null; } catch (_) { return null; } };
+  // Current → backup → (primary only) the legacy un-suffixed key.
+  return tryKey(SESSION_KEY)
+    || tryKey(SESSION_KEY + ':bak')
+    || (WIN_KEY === 'primary' ? tryKey('tileterm.session.v1') : null);
 }
 function loadLayouts() { try { return JSON.parse(localStorage.getItem(LAYOUTS_KEY)) || {}; } catch (_) { return {}; } }
 function saveNamedLayout(name) {
@@ -1301,9 +1307,13 @@ function applyNamedLayout(name) {
 function restoreConfigs(list) {
   if (!list.length) { addPane(); return; }
   list.forEach((cfg) => {
-    const p = createPane(cfg);
-    if (cfg.collapsed) collapsePane(p, true);
+    try {
+      const p = createPane(cfg);
+      if (p && cfg.collapsed) collapsePane(p, true);
+    } catch (err) { console.log('restore pane failed:', err && err.message); }
   });
+  // If restore produced nothing usable, fall back to a fresh pane rather than a blank window.
+  if (!panes.length && !stored.length) addPane();
   applyGlobalTitleSize(globalTitleSize, true);
   relayout();
   const first = panes[0];
@@ -1454,9 +1464,8 @@ document.getElementById('btn-span').addEventListener('click', async () => { awai
 function focusedPane() { return panes.find((p) => p.id === focusedId) || panes[0]; }
 function killAll() {
   if (!confirm('Close ALL terminals (active and stored)? This cannot be undone.')) return;
-  [...panes].forEach((p) => closePane(p.id));
   [...stored].forEach((p) => closeStored(p));
-  if (panes.length === 0 && stored.length === 0) addPane();
+  [...panes].forEach((p) => closePane(p.id));   // the last close shuts the window
 }
 function toggleAlerts() {
   alertsEnabled = !alertsEnabled;
