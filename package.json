@@ -39,8 +39,13 @@
         }
       ],
       "icon": "build/icon.icns",
-      "hardenedRuntime": false,
+      "hardenedRuntime": true,
       "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "notarize": {
+        "teamId": "K2W6NQ6F66"
+      },
       "extendInfo": {
         "NSMicrophoneUsageDescription": "DiscoVibe uses the microphone for voice mode, letting you speak commands into the focused terminal.",
         "NSSpeechRecognitionUsageDescription": "DiscoVibe uses speech recognition to turn your spoken words into terminal commands."
