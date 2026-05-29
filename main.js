@@ -13,6 +13,19 @@ function loginShell() { return process.env.SHELL || '/bin/zsh'; }
 const ptys = new Map();
 // All open TileTerm windows
 const windows = new Set();
+let isQuitting = false;
+
+// Persist which windows are open (and on which display) so a crash/quit restores them.
+function windowsFile() { return path.join(app.getPath('userData'), 'windows.json'); }
+function persistWindows() {
+  try {
+    const list = [...windows].filter((w) => !w.isDestroyed()).map((w) => ({ displayId: w.__displayId, role: w.__role, key: w.__key }));
+    fs.writeFileSync(windowsFile(), JSON.stringify(list));
+  } catch (_) {}
+}
+function readWindows() {
+  try { return JSON.parse(fs.readFileSync(windowsFile(), 'utf8')); } catch (_) { return []; }
+}
 
 function defaultShell() {
   if (os.platform() === 'win32') return process.env.COMSPEC || 'powershell.exe';
@@ -62,14 +75,17 @@ function createWindow(display, role) {
   });
 
   win.__displayId = display.id;
+  win.__role = role || 'primary';
+  win.__key = (role === 'primary' || !role) ? 'primary' : String(display.id);
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'), {
-    query: { role: role || 'primary' }
+    query: { role: win.__role, key: win.__key }
   });
   win.maximize();
   attachDebug(win);
 
   windows.add(win);
-  win.on('closed', () => windows.delete(win));
+  persistWindows();
+  win.on('closed', () => { windows.delete(win); if (!isQuitting) persistWindows(); });
   return win;
 }
 
@@ -306,7 +322,22 @@ app.whenReady().then(() => {
   });
 
   buildMenu();
-  createWindow(screen.getPrimaryDisplay(), 'primary');
+
+  // Restore the window set from the last session (crash/quit recovery).
+  const saved = readWindows();
+  const displays = screen.getAllDisplays();
+  const hasPrimary = saved.some((w) => w.role === 'primary' || w.key === 'primary');
+  if (saved.length && hasPrimary) {
+    saved.forEach((w, i) => {
+      const d = displays.find((dd) => String(dd.id) === String(w.displayId))
+        || (i === 0 ? screen.getPrimaryDisplay() : displays[i % displays.length]);
+      createWindow(d || screen.getPrimaryDisplay(), w.role || 'primary');
+    });
+  } else {
+    createWindow(screen.getPrimaryDisplay(), 'primary');
+  }
+
+  app.on('before-quit', () => { isQuitting = true; });
 
   screen.on('display-added', broadcastDisplays);
   screen.on('display-removed', broadcastDisplays);

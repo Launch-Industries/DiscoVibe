@@ -55,6 +55,7 @@ const voiceAI = {
 // This window's identity + role (primary window restores the saved session).
 const WIN_TAG = Math.random().toString(36).slice(2, 8);
 const ROLE = new URLSearchParams(location.search).get('role') || 'primary';
+const WIN_KEY = new URLSearchParams(location.search).get('key') || 'primary';
 
 const MIN_TITLE = 12, MAX_TITLE = 56;
 const MIN_FONT = 8, MAX_FONT = 32;
@@ -1185,7 +1186,7 @@ function openCommands(anchor) {
 // Persistence
 // ===========================================================================
 const GLOBALS_KEY = 'tileterm.globals.v1';
-const SESSION_KEY = 'tileterm.session.v1';
+const SESSION_KEY = 'tileterm.session.v1:' + WIN_KEY;   // per-window so every monitor restores
 const LAYOUTS_KEY = 'tileterm.layouts.v1';
 
 function paneConfig(p, collapsed) {
@@ -1200,7 +1201,6 @@ function saveGlobals() {
 }
 let saveTimer = null;
 function scheduleSave() {
-  if (ROLE !== 'primary') return;        // only the primary window owns the session
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => { try { localStorage.setItem(SESSION_KEY, JSON.stringify({ panes: serializePanes() })); } catch (_) {} }, 400);
 }
@@ -1441,9 +1441,9 @@ async function updateDisplayReadout() {
 window.api.onDisplays(() => updateDisplayReadout());
 window.addEventListener('resize', () => panes.forEach(fitPane));
 
-// Flush the session synchronously on quit so a crash/close loses nothing.
+// Flush this window's session synchronously on quit so a crash/close loses nothing.
 window.addEventListener('beforeunload', () => {
-  if (ROLE === 'primary') { try { localStorage.setItem(SESSION_KEY, JSON.stringify({ panes: serializePanes() })); } catch (_) {} }
+  try { localStorage.setItem(SESSION_KEY, JSON.stringify({ panes: serializePanes() })); } catch (_) {}
 });
 
 // ===========================================================================
@@ -1567,13 +1567,9 @@ function openOnboarding() {
   applySettings();
   renderIcons();
 
-  if (ROLE === 'primary') {
-    const s = loadSession();
-    if (s && Array.isArray(s.panes) && s.panes.length) restoreConfigs(s.panes);
-    else addPane();
-  } else {
-    addPane();
-  }
+  const s = loadSession();
+  if (s && Array.isArray(s.panes) && s.panes.length) restoreConfigs(s.panes);
+  else addPane();
   updateDisplayReadout();
   pollUsage(true);
 
