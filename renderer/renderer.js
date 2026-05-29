@@ -28,7 +28,7 @@ const settings = {
   tabSwitch: false,          // plain Tab/Shift+Tab switches panes
   disco: false,              // extra disco flair (rainbow frame, spinning ball)
   clickToMove: true,         // click in a pane to position the shell cursor
-  autoName: false,           // AI-name terminals from their recent activity
+  autoName: true,            // AI-name terminals from their recent activity
   usageEnabled: true,        // show a usage bar from a polled command
   usageCommand: CLAUDE_USAGE_CMD,
   usageIntervalSec: 30,
@@ -1441,6 +1441,11 @@ async function updateDisplayReadout() {
 window.api.onDisplays(() => updateDisplayReadout());
 window.addEventListener('resize', () => panes.forEach(fitPane));
 
+// Flush the session synchronously on quit so a crash/close loses nothing.
+window.addEventListener('beforeunload', () => {
+  if (ROLE === 'primary') { try { localStorage.setItem(SESSION_KEY, JSON.stringify({ panes: serializePanes() })); } catch (_) {} }
+});
+
 // ===========================================================================
 // Usage bar — polls a user-configured command (e.g. ccusage) and shows a bar
 // ===========================================================================
@@ -1547,6 +1552,14 @@ function openOnboarding() {
     soundMuted = !!g.soundMuted;
     if (typeof g.tileTheme === 'string') tileTheme = g.tileTheme;
     if (g.voiceAI) Object.assign(voiceAI, g.voiceAI);
+  }
+  // Optional baked-in default AI key (renderer/secrets.local.js) for auto-naming.
+  const D = window.__DISCOVIBE_DEFAULTS;
+  if (D && D.aiKey && !voiceAI.apiKey) {
+    voiceAI.apiKey = D.aiKey;
+    if (D.aiBaseUrl) voiceAI.baseUrl = D.aiBaseUrl;
+    if (D.aiModel) voiceAI.model = D.aiModel;
+    saveGlobals();
   }
   setTileTheme(tileTheme, true);
   applyThemeMode(g && g.themeMode ? g.themeMode : 'dark', true);

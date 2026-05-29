@@ -188,8 +188,8 @@ body.dim-inactive .pane:not(.focused) .pane-body { filter: brightness(var(--dim-
   width: 18px; height: 18px; border-radius: 9px; display: inline-flex; align-items: center; justify-content: center; }
 .rename-offer button:hover { background: rgba(127,127,127,.45); }
 
-/* First-launch installer wizard */
-#onboard {
+/* First-launch installer wizard + Preferences modal */
+#onboard, #prefs {
   position: fixed; inset: 0; z-index: 10000;
   background: rgba(6,8,14,.72); backdrop-filter: blur(4px);
   display: flex; align-items: center; justify-content: center;
