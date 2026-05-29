@@ -100,7 +100,7 @@ const TILE_THEMES = {
   // Pride & heritage flags
   'LGBTQ Pride':       ['#e40303', '#ff8c00', '#ffed00', '#008026', '#004dff', '#750787', '#e40303', '#008026'],
   'Trans Pride':       ['#5bcefa', '#f5a9b8', '#ffffff', '#5bcefa', '#f5a9b8', '#ffffff', '#5bcefa', '#f5a9b8'],
-  'Black Pride':       ['#000000', '#e31b23', '#007a3d', '#000000', '#e31b23', '#007a3d', '#000000', '#e31b23'],
+  'Black Pride':       ['#000000', '#a4161a', '#0a6e3a', '#000000', '#a4161a', '#0a6e3a', '#000000', '#a4161a'],
   'Colombian':         ['#fcd116', '#003893', '#ce1126', '#fcd116', '#003893', '#ce1126', '#fcd116', '#003893'],
   'Nigerian':          ['#008751', '#ffffff', '#008751', '#ffffff', '#008751', '#ffffff', '#008751', '#ffffff'],
   'Mexican':           ['#006847', '#ffffff', '#ce1126', '#006847', '#ffffff', '#ce1126', '#006847', '#ce1126'],
@@ -168,6 +168,40 @@ function readableFg(hex) {
   const L = luminance(hex);
   return contrast(L, 1) >= contrast(L, 0) ? '#ffffff' : '#000000';
 }
+function mixHex(a, b, t) {
+  const A = hexToRgb(a), B = hexToRgb(b);
+  const h = (n) => Math.round(n).toString(16).padStart(2, '0');
+  return `#${h(A.r + (B.r - A.r) * t)}${h(A.g + (B.g - A.g) * t)}${h(A.b + (B.b - A.b) * t)}`;
+}
+
+// THE CONTRAST RULE: every pane background must clear MIN_BG_CONTRAST against its
+// best (black/white) text. If a chosen color can't, we darken or lighten it (keeping
+// its hue) just enough until it does — so text is ALWAYS legible, on any color.
+const MIN_BG_CONTRAST = 6.0;   // comfortably above WCAG AA (4.5); near AAA
+function enforceContrast(bg) {
+  bg = toHex6(bg);
+  const fg = readableFg(bg);            // '#ffffff' or '#000000'
+  const targetL = fg === '#ffffff' ? 1 : 0;
+  if (contrast(luminance(bg), targetL) >= MIN_BG_CONTRAST) return bg;
+  // White text → darken the background; black text → lighten it.
+  const toward = fg;                    // blend bg toward the text's opposite extreme
+  let out = bg;
+  for (let t = 0.06; t <= 1.001; t += 0.06) {
+    out = mixHex(bg, toward === '#ffffff' ? '#000000' : '#ffffff', t);
+    if (contrast(luminance(out), targetL) >= MIN_BG_CONTRAST) break;
+  }
+  return out;
+}
+// Ensure an ANSI color stays legible on a given background (e.g. green text on a
+// green flag tile): if its contrast is too low, blend it toward the foreground.
+function legibleOn(hex, bgL, fg) {
+  if (contrast(luminance(hex), bgL) >= 3) return hex;
+  for (let t = 0.35; t < 1; t += 0.2) {
+    const m = mixHex(hex, fg, t);
+    if (contrast(luminance(m), bgL) >= 3) return m;
+  }
+  return fg;
+}
 
 // ===========================================================================
 // Attention bell
@@ -181,17 +215,22 @@ function ensureAudio() {
 function playChime() {
   if (soundMuted) return;
   const ctx = ensureAudio(); if (!ctx) return;
-  const now = ctx.currentTime;
-  [880, 1318.5].forEach((freq, i) => {
-    const t = now + i * 0.16;
-    const osc = ctx.createOscillator(), gain = ctx.createGain();
-    osc.type = 'sine'; osc.frequency.value = freq;
-    gain.gain.setValueAtTime(0.0001, t);
-    gain.gain.exponentialRampToValueAtTime(0.25, t + 0.01);
-    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.45);
-    osc.connect(gain).connect(ctx.destination);
-    osc.start(t); osc.stop(t + 0.5);
-  });
+  const schedule = () => {
+    const now = ctx.currentTime;
+    [880, 1318.5].forEach((freq, i) => {
+      const t = now + i * 0.16;
+      const osc = ctx.createOscillator(), gain = ctx.createGain();
+      osc.type = 'sine'; osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.exponentialRampToValueAtTime(0.25, t + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.45);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(t); osc.stop(t + 0.5);
+    });
+  };
+  // A suspended context won't actually sound until resumed (the real "bell stopped" bug).
+  if (ctx.state === 'suspended') ctx.resume().then(schedule).catch(() => {});
+  else schedule();
 }
 const MAX_CHIMES = 6, CHIME_INTERVAL = 4000;
 function triggerAttention(pane) {
@@ -276,11 +315,13 @@ const ANSI_FOR_LIGHT = {
 };
 
 function applyColor(pane, color) {
-  color = toHex6(color);
+  color = enforceContrast(toHex6(color));   // guarantee legible text on this background
   pane.color = color;
   const fg = readableFg(color);
-  const lightBg = luminance(color) > 0.45;
-  const ansi = lightBg ? ANSI_FOR_LIGHT : ANSI_FOR_DARK;
+  const bgL = luminance(color);
+  const baseAnsi = bgL > 0.45 ? ANSI_FOR_LIGHT : ANSI_FOR_DARK;
+  const ansi = {};
+  for (const k in baseAnsi) ansi[k] = legibleOn(baseAnsi[k], bgL, fg);
   pane.headerEl.style.background = color;
   pane.headerEl.style.color = fg;
   pane.headerEl.style.borderBottom = `2px solid ${fg}33`;   // header divider line
@@ -397,8 +438,10 @@ function createPane(opts = {}) {
     pane.name = t; pane.nameInput.value = t; pane.manualName = false; scheduleSave();
   });
 
-  // Click to position the shell cursor (translate the click into arrow keys).
-  termLayer.addEventListener('mouseup', () => {
+  // Click to position the shell cursor — HORIZONTAL only, and only on the line the
+  // cursor is already on. (Sending up/down arrows would trigger shell history, which
+  // is what was popping up your previous commands.)
+  termLayer.addEventListener('mouseup', (ev) => {
     if (!settings.clickToMove) return;
     if (term.hasSelection && term.hasSelection()) return;     // a drag-select, not a click
     const screen = termLayer.querySelector('.xterm-screen');
@@ -406,15 +449,13 @@ function createPane(opts = {}) {
     const r = screen.getBoundingClientRect();
     if (!r.width || !r.height) return;
     const cellW = r.width / term.cols, cellH = r.height / term.rows;
-    const ev = window.event || {};
     const tx = Math.max(0, Math.min(term.cols - 1, Math.round((ev.clientX - r.left) / cellW)));
-    const ty = Math.max(0, Math.min(term.rows - 1, Math.floor((ev.clientY - r.top) / cellH)));
+    const ty = Math.floor((ev.clientY - r.top) / cellH);
     const cx = term.buffer.active.cursorX, cy = term.buffer.active.cursorY;
-    let seq = '';
-    const dRow = ty - cy, dCol = tx - cx;
-    seq += (dRow > 0 ? '\x1b[B' : '\x1b[A').repeat(Math.abs(dRow));
-    seq += (dCol > 0 ? '\x1b[C' : '\x1b[D').repeat(Math.abs(dCol));
-    if (seq) window.api.input(id, seq);
+    if (ty !== cy) return;                                     // different row → don't move (never send up/down)
+    const dCol = tx - cx;
+    if (!dCol) return;
+    window.api.input(id, (dCol > 0 ? '\x1b[C' : '\x1b[D').repeat(Math.abs(dCol)));
   });
 
   // Companion browser
