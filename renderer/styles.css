@@ -82,6 +82,13 @@ body.disco .brand-text { animation-duration: 4s; }
 .readout { font-size: 12px; color: var(--readout); display: inline-flex; align-items: center; gap: 4px; }
 .readout svg.lucide { width: 14px; height: 14px; }
 
+/* Usage bar */
+.usage { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--readout); }
+.usage-label { font-weight: 700; }
+.usage-bar { width: 90px; height: 8px; border-radius: 4px; background: rgba(127,127,127,.3); overflow: hidden; }
+.usage-fill { display: block; height: 100%; width: 0%; background: #FFD100; transition: width .4s ease; }
+.usage-text { font-variant-numeric: tabular-nums; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 .tb-btn {
   appearance: none;
   display: inline-flex;
@@ -169,6 +176,48 @@ body.dim-inactive .pane.focused { filter: none; }
   pointer-events: none; z-index: 50;
   transition: border-color .25s ease;
 }
+
+/* Rename suggestion pill (when activity drifts off-context) */
+.rename-offer {
+  display: none; align-items: center; gap: 5px; flex: 0 0 auto;
+  background: rgba(255,209,0,.18); border: 1px solid #FFD100; color: inherit;
+  border-radius: 12px; padding: 1px 4px 1px 8px; font-size: 11px; font-weight: 700;
+}
+.rename-offer.show { display: inline-flex; }
+.rename-offer button { border: none; background: rgba(127,127,127,.25); color: inherit; cursor: pointer;
+  width: 18px; height: 18px; border-radius: 9px; display: inline-flex; align-items: center; justify-content: center; }
+.rename-offer button:hover { background: rgba(127,127,127,.45); }
+
+/* First-launch installer wizard */
+#onboard {
+  position: fixed; inset: 0; z-index: 10000;
+  background: rgba(6,8,14,.72); backdrop-filter: blur(4px);
+  display: flex; align-items: center; justify-content: center;
+}
+.ob-card {
+  width: 560px; max-width: 92vw; max-height: 88vh; overflow: auto;
+  background: var(--pop-bg); color: var(--chrome-fg);
+  border: 1px solid var(--pop-line); border-radius: 16px; padding: 20px;
+  box-shadow: 0 20px 60px rgba(0,0,0,.6);
+}
+.ob-head { font-size: 18px; font-weight: 800; display: flex; align-items: center; gap: 8px; }
+.ob-head i, .ob-head svg.lucide { color: #b86bd8; width: 22px; height: 22px; }
+.ob-sub { color: var(--readout); font-size: 13px; margin: 6px 0 14px; }
+.ob-list { display: flex; flex-direction: column; gap: 4px; }
+.ob-row { display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 10px; cursor: pointer; }
+.ob-row:hover { background: var(--btn-bg-hover); }
+.ob-txt { flex: 1 1 auto; display: flex; flex-direction: column; }
+.ob-txt b { font-size: 14px; }
+.ob-txt span { font-size: 12px; color: var(--readout); }
+.ob-status { font-size: 12px; font-weight: 700; min-width: 90px; text-align: right; }
+.ob-log {
+  margin-top: 12px; max-height: 200px; overflow: auto; white-space: pre-wrap;
+  background: #06080e; color: #cdd3df; border: 1px solid var(--pop-line); border-radius: 10px;
+  padding: 10px; font-family: ui-monospace, Menlo, monospace; font-size: 11px;
+}
+.ob-actions { display: flex; justify-content: space-between; align-items: center; margin-top: 16px; gap: 10px; }
+.ob-skip { background: transparent; border: none; color: var(--readout); cursor: pointer; font-size: 13px; }
+.ob-skip:hover { color: var(--chrome-fg); }
 .grid-row { display: flex; flex: 1 1 0; gap: 6px; min-height: 0; }
 
 .pane {
@@ -216,6 +265,12 @@ body.dim-inactive .pane.focused { filter: none; }
 }
 .pane-btn:hover { background: rgba(127,127,127,.30); }
 .bell-toggle.off { opacity: .45; }
+.note-btn { position: relative; }
+.note-btn.has-note::after {
+  content: ""; position: absolute; top: 2px; right: 2px;
+  width: 6px; height: 6px; border-radius: 50%; background: #FFD100;
+  box-shadow: 0 0 0 1px rgba(0,0,0,.4);
+}
 
 /* Color chip — always has a visible, contrasting border */
 .swatch-btn {

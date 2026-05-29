@@ -24,7 +24,11 @@ const settings = {
   dimLevel: 0.5,             // brightness multiplier for inactive panes (lower = darker)
   tabSwitch: false,          // plain Tab/Shift+Tab switches panes
   disco: false,              // extra disco flair (rainbow frame, spinning ball)
-  clickToMove: true          // click in a pane to position the shell cursor
+  clickToMove: true,         // click in a pane to position the shell cursor
+  autoName: false,           // AI-name terminals from their recent activity
+  usageEnabled: false,       // show a usage bar from a polled command
+  usageCommand: '',          // e.g. ccusage --json   (or any command that prints a %)
+  usageIntervalSec: 30
 };
 
 // Optional AI clean-up of dictated speech (OpenAI-compatible endpoint, e.g. free Qwen on
@@ -234,20 +238,38 @@ function fitPane(pane) {
 // ===========================================================================
 // Per-pane appearance
 // ===========================================================================
+// ANSI palettes tuned for readability ON a dark vs light background, so program
+// output (ls colors, git, npm, etc.) keeps proper contrast whatever the pane color is.
+const ANSI_FOR_DARK = {
+  black: '#5b6270', red: '#ff6b6b', green: '#7bd88f', yellow: '#ffd866',
+  blue: '#82aaff', magenta: '#c792ea', cyan: '#5fd7d7', white: '#e6e9ef',
+  brightBlack: '#8a93a6', brightRed: '#ff8787', brightGreen: '#a6e3a1', brightYellow: '#ffe9a3',
+  brightBlue: '#9ec1ff', brightMagenta: '#e0b0ff', brightCyan: '#9af2f2', brightWhite: '#ffffff'
+};
+const ANSI_FOR_LIGHT = {
+  black: '#1a1a1a', red: '#c0392b', green: '#1e8449', yellow: '#9a6b00',
+  blue: '#1f5fbf', magenta: '#8e44ad', cyan: '#0e7490', white: '#3a3f4b',
+  brightBlack: '#555a66', brightRed: '#e74c3c', brightGreen: '#1f8b4c', brightYellow: '#b7791f',
+  brightBlue: '#2f6fe0', brightMagenta: '#a23fc0', brightCyan: '#138d90', brightWhite: '#11131a'
+};
+
 function applyColor(pane, color) {
   color = toHex6(color);
   pane.color = color;
   const fg = readableFg(color);
+  const lightBg = luminance(color) > 0.45;
+  const ansi = lightBg ? ANSI_FOR_LIGHT : ANSI_FOR_DARK;
   pane.headerEl.style.background = color;
   pane.headerEl.style.color = fg;
+  pane.headerEl.style.borderBottom = `2px solid ${fg}33`;   // header divider line
   pane.nameInput.style.color = fg;
   pane.colorInput.value = color;
   pane.swatchBtn.style.setProperty('--swatch-fill', color);
   pane.swatchBtn.style.setProperty('--swatch-ring', fg);
   pane.term.options.theme = {
-    ...pane.term.options.theme,
     background: color, foreground: fg, cursor: fg, cursorAccent: color,
-    selectionBackground: fg === '#ffffff' ? 'rgba(255,255,255,0.3)' : 'rgba(0,0,0,0.25)'
+    selectionBackground: fg === '#ffffff' ? 'rgba(255,255,255,0.3)' : 'rgba(0,0,0,0.25)',
+    ...ansi
   };
   pane.bodyEl.style.background = color;
 }
@@ -305,6 +327,7 @@ function createPane(opts = {}) {
   const collapseBtn = node.querySelector('.collapse-btn');
   const closeBtn = node.querySelector('.close-btn');
   const viewToggle = node.querySelector('.view-toggle');
+  const noteBtn = node.querySelector('.note-btn');
   const grip = node.querySelector('.grip');
   const webview = node.querySelector('.web-view');
   const webUrlInput = node.querySelector('.web-url');
@@ -328,6 +351,7 @@ function createPane(opts = {}) {
     el: node, headerEl, bodyEl, termLayer, nameInput, colorInput, swatchBtn,
     webview, webUrlInput, webMode: false, webUrl: opts.webUrl || '',
     bellOn: opts.bellOn !== false,
+    note: opts.note || '', manualName: opts.manual !== undefined ? !!opts.manual : !!opts.name, noteBtn,
     collapsed: false, attnTimer: null, chimeCount: 0, lastActivity: Date.now()
   };
   panes.push(pane);
@@ -402,9 +426,18 @@ function createPane(opts = {}) {
   node.addEventListener('mousedown', acknowledge);
   if (term.textarea) term.textarea.addEventListener('focus', acknowledge);
 
-  // Rename
-  nameInput.addEventListener('change', () => { pane.name = nameInput.value; scheduleSave(); });
+  // Rename (a manual edit stops AI auto-naming for this pane)
+  nameInput.addEventListener('change', () => { pane.name = nameInput.value; pane.manualName = true; scheduleSave(); });
   nameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { nameInput.blur(); term.focus(); } });
+
+  // Rename-suggestion pill (shown when activity drifts off the current name)
+  const offerEl = document.createElement('span'); offerEl.className = 'rename-offer';
+  nameInput.insertAdjacentElement('afterend', offerEl);
+  pane.offerEl = offerEl;
+
+  // Per-window note ("what I'm working on") — saved with the session
+  noteBtn.classList.toggle('has-note', !!pane.note);
+  noteBtn.addEventListener('click', () => openNotePopover(pane, noteBtn));
 
   // Color: chip opens preset popover; hidden input is the custom picker
   swatchBtn.addEventListener('click', () => openColorPopover(pane, swatchBtn));
@@ -650,6 +683,73 @@ function stepperRow(labelText, getVal, onMinus, onPlus) {
   return row;
 }
 
+function openNotePopover(pane, anchor) {
+  const c = document.createElement('div');
+  const title = document.createElement('div'); title.className = 'pop-title'; title.textContent = 'What are you working on?';
+  c.appendChild(title);
+  const ta = document.createElement('textarea');
+  ta.value = pane.note || '';
+  ta.placeholder = 'e.g. Fixing the checkout bug on the storefront repo…';
+  ta.rows = 4;
+  ta.style.cssText = 'width:240px;max-width:70vw;resize:vertical;background:var(--btn-bg);color:inherit;border:1px solid var(--pop-line);border-radius:8px;padding:8px;font:inherit;font-size:13px';
+  ta.addEventListener('input', () => { pane.note = ta.value; pane.noteBtn.classList.toggle('has-note', !!pane.note.trim()); scheduleSave(); });
+  c.appendChild(ta);
+  const note = document.createElement('div'); note.className = 'layout-empty';
+  note.textContent = 'Saved with this window and restored when DiscoVibe reopens.';
+  c.appendChild(note);
+  openPopover(anchor, c);
+  setTimeout(() => ta.focus(), 30);
+}
+
+// AI naming: derive a short label from a pane's recent activity (opt-in, needs the AI key).
+async function aiSuggestName(pane) {
+  const buf = pane.term.buffer.active; const lines = [];
+  for (let i = Math.max(0, buf.length - 40); i < buf.length; i++) { const ln = buf.getLine(i); if (ln) { const s = ln.translateToString(true); if (s.trim()) lines.push(s); } }
+  const text = lines.slice(-30).join('\n').slice(-2000);
+  if (text.trim().length < 20) return '';
+  const res = await fetch(voiceAI.baseUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + voiceAI.apiKey, 'HTTP-Referer': 'https://launchindustries.biz', 'X-Title': 'DiscoVibe' },
+    body: JSON.stringify({
+      model: voiceAI.model, temperature: 0.3, max_tokens: 12,
+      messages: [
+        { role: 'system', content: 'You name a terminal tab from its recent output. Reply with a 2-4 word Title Case label describing the task/project — no quotes, no punctuation, no explanation.' },
+        { role: 'user', content: text }
+      ]
+    })
+  });
+  if (!res.ok) return '';
+  const j = await res.json();
+  return (j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content || '').trim().replace(/^["'`]|["'`.]+$/g, '').slice(0, 40);
+}
+const norm = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+function showRenameOffer(pane, suggestion) {
+  const el = pane.offerEl;
+  el.innerHTML = `<span>→ ${suggestion.replace(/</g, '&lt;')}</span>`;
+  const ok = document.createElement('button'); ok.innerHTML = lic('check'); ok.title = 'Rename';
+  const no = document.createElement('button'); no.innerHTML = lic('x'); no.title = 'Keep current name';
+  ok.addEventListener('click', () => { pane.name = suggestion; pane.nameInput.value = suggestion; el.classList.remove('show'); scheduleSave(); });
+  no.addEventListener('click', () => { pane._dismissed = suggestion; el.classList.remove('show'); });
+  el.append(ok, no); el.classList.add('show'); renderIcons();
+}
+let autoNameBusy = false;
+setInterval(async () => {
+  if (!settings.autoName || !voiceAI.apiKey || autoNameBusy) return;
+  autoNameBusy = true;
+  for (const p of [...panes]) {
+    const sig = p.term.buffer.active.length;
+    if (p._lastNameSig === sig) continue;       // no new output since last check
+    p._lastNameSig = sig;
+    try {
+      const suggestion = await aiSuggestName(p);
+      if (!suggestion) continue;
+      if (!p.manualName) { p.name = suggestion; p.nameInput.value = suggestion; scheduleSave(); }
+      else if (norm(suggestion) !== norm(p.nameInput.value) && suggestion !== p._dismissed) { showRenameOffer(p, suggestion); }
+    } catch (_) {}
+  }
+  autoNameBusy = false;
+}, 45000);
+
 function openColorPopover(pane, anchor) {
   const c = document.createElement('div');
   const title = document.createElement('div'); title.className = 'pop-title'; title.textContent = 'Background color';
@@ -717,6 +817,13 @@ function openGlobalSettings(anchor) {
   ctb.addEventListener('change', () => { settings.clickToMove = ctb.checked; saveGlobals(); window.api.broadcast({ type: 'settings', value: { ...settings } }); });
   ctmRow.append(ctl, ctb); c.appendChild(ctmRow);
 
+  // Auto-name terminals from activity (uses the AI key below)
+  const anRow = document.createElement('label'); anRow.className = 'pop-row checkbox';
+  const anl = document.createElement('span'); anl.textContent = 'Auto-name from activity (AI)';
+  const anb = document.createElement('input'); anb.type = 'checkbox'; anb.checked = settings.autoName;
+  anb.addEventListener('change', () => { settings.autoName = anb.checked; saveGlobals(); window.api.broadcast({ type: 'settings', value: { ...settings } }); });
+  anRow.append(anl, anb); c.appendChild(anRow);
+
   const discoRow = document.createElement('label'); discoRow.className = 'pop-row checkbox';
   const disl = document.createElement('span'); disl.textContent = 'Disco mode ✨';
   const disb = document.createElement('input'); disb.type = 'checkbox'; disb.checked = settings.disco;
@@ -738,13 +845,6 @@ function openGlobalSettings(anchor) {
     () => applyGlobalTextSize(globalFontSize - 1),
     () => applyGlobalTextSize(globalFontSize + 1)));
 
-  const fontRow = document.createElement('div'); fontRow.className = 'pop-row';
-  const fl = document.createElement('span'); fl.textContent = 'Font';
-  const sel = document.createElement('select');
-  FONTS.forEach((f) => { const o = document.createElement('option'); o.value = f.css; o.textContent = f.label; if (f.css === globalFontFamily) o.selected = true; sel.appendChild(o); });
-  sel.addEventListener('change', () => applyGlobalFont(sel.value));
-  fontRow.append(fl, sel); c.appendChild(fontRow);
-
   const centerRow = document.createElement('label'); centerRow.className = 'pop-row checkbox';
   const cl = document.createElement('span'); cl.textContent = 'Center titles';
   const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = globalTitleCenter;
@@ -754,6 +854,29 @@ function openGlobalSettings(anchor) {
   const note = document.createElement('div'); note.className = 'layout-empty';
   note.textContent = 'Ctrl+Tab always cycles panes. Tab option also disables shell completion while on.';
   c.appendChild(note);
+
+  // --- Usage bar ---
+  const uTitle = document.createElement('div'); uTitle.className = 'pop-title'; uTitle.style.marginTop = '10px';
+  uTitle.textContent = 'Usage bar';
+  c.appendChild(uTitle);
+  const uRow = document.createElement('label'); uRow.className = 'pop-row checkbox';
+  const ul = document.createElement('span'); ul.textContent = 'Show usage bar';
+  const ub = document.createElement('input'); ub.type = 'checkbox'; ub.checked = settings.usageEnabled;
+  ub.addEventListener('change', () => { settings.usageEnabled = ub.checked; saveGlobals(); pollUsage(true); });
+  uRow.append(ul, ub); c.appendChild(uRow);
+  const ucRow = document.createElement('div'); ucRow.className = 'pop-row';
+  const ucl = document.createElement('span'); ucl.textContent = 'Command';
+  const uci = document.createElement('input'); uci.type = 'text'; uci.value = settings.usageCommand; uci.spellcheck = false; uci.placeholder = 'ccusage --json';
+  uci.style.cssText = 'flex:1 1 auto;max-width:150px;background:var(--btn-bg);color:inherit;border:1px solid var(--pop-line);border-radius:6px;padding:4px 6px;font-size:12px';
+  uci.addEventListener('change', () => { settings.usageCommand = uci.value.trim(); saveGlobals(); pollUsage(true); });
+  ucRow.append(ucl, uci); c.appendChild(ucRow);
+  c.appendChild(stepperRow('Refresh (sec)',
+    () => settings.usageIntervalSec + 's',
+    () => { settings.usageIntervalSec = Math.max(5, settings.usageIntervalSec - 5); saveGlobals(); },
+    () => { settings.usageIntervalSec = Math.min(600, settings.usageIntervalSec + 5); saveGlobals(); }));
+  const uNote = document.createElement('div'); uNote.className = 'layout-empty';
+  uNote.textContent = 'Runs the command on an interval and shows its output (fills the bar from any “NN%”). For Claude usage try a tool like ccusage.';
+  c.appendChild(uNote);
 
   // --- Voice (speech-to-text) ---
   const mkInput = (labelText, key, type) => {
@@ -989,7 +1112,7 @@ const LAYOUTS_KEY = 'tileterm.layouts.v1';
 
 function paneConfig(p, collapsed) {
   return { name: p.nameInput.value || p.name, color: p.color, bellOn: p.bellOn,
-    webUrl: p.webUrl || '', collapsed: !!collapsed };
+    webUrl: p.webUrl || '', note: p.note || '', manual: !!p.manualName, collapsed: !!collapsed };
 }
 function serializePanes() {
   return [...panes.map((p) => paneConfig(p, false)), ...stored.map((p) => paneConfig(p, true))];
@@ -1239,6 +1362,98 @@ window.api.onDisplays(() => updateDisplayReadout());
 window.addEventListener('resize', () => panes.forEach(fitPane));
 
 // ===========================================================================
+// Usage bar — polls a user-configured command (e.g. ccusage) and shows a bar
+// ===========================================================================
+const usageEl = document.getElementById('usage-readout');
+let lastUsageRun = 0;
+function renderUsage(out) {
+  const text = (out || '').trim();
+  const line = text.split('\n').filter((l) => l.trim()).pop() || '';
+  const m = text.match(/(\d+(?:\.\d+)?)\s*%/);
+  usageEl.querySelector('.usage-label').textContent = 'Usage';
+  usageEl.querySelector('.usage-fill').style.width = m ? Math.min(100, parseFloat(m[1])) + '%' : '0%';
+  usageEl.querySelector('.usage-text').textContent = line.slice(0, 60);
+  usageEl.title = text.slice(0, 500);
+}
+async function pollUsage(force) {
+  if (!settings.usageEnabled || !settings.usageCommand) { usageEl.hidden = true; return; }
+  const now = Date.now();
+  if (!force && now - lastUsageRun < settings.usageIntervalSec * 1000) return;
+  lastUsageRun = now;
+  usageEl.hidden = false;
+  try { const r = await window.api.runUsage(settings.usageCommand); renderUsage(r && (r.out || r.err)); }
+  catch (_) {}
+}
+setInterval(() => pollUsage(false), 5000);
+
+// ===========================================================================
+// First-launch installer wizard
+// ===========================================================================
+const ONBOARD_KEY = 'tileterm.onboarded.v1';
+const INSTALL_TOOLS = [
+  { id: 'brew', name: 'Homebrew', desc: 'Package manager (needed by most tools below)', check: 'command -v brew', cmd: '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"' },
+  { id: 'git', name: 'Git', desc: 'Version control', check: 'command -v git', cmd: 'brew install git' },
+  { id: 'node', name: 'Node.js', desc: 'JS runtime + npm (for many CLIs)', check: 'command -v node', cmd: 'brew install node' },
+  { id: 'claude', name: 'Claude Code', desc: "Anthropic's coding agent CLI", check: 'command -v claude', cmd: 'npm install -g @anthropic-ai/claude-code' },
+  { id: 'codex', name: 'Codex CLI', desc: "OpenAI's coding agent CLI", check: 'command -v codex', cmd: 'npm install -g @openai/codex' },
+  { id: 'gh', name: 'GitHub CLI', desc: 'gh — GitHub from the terminal', check: 'command -v gh', cmd: 'brew install gh' },
+  { id: 'rg', name: 'ripgrep', desc: 'Fast code search (rg)', check: 'command -v rg', cmd: 'brew install ripgrep' },
+  { id: 'python', name: 'Python 3', desc: 'Python runtime + pip', check: 'command -v python3', cmd: 'brew install python' },
+  { id: 'clt', name: 'Xcode Command Line Tools', desc: 'Compilers Homebrew depends on', check: 'xcode-select -p', cmd: 'xcode-select --install' }
+];
+
+function openOnboarding() {
+  const ov = document.createElement('div'); ov.id = 'onboard';
+  ov.innerHTML = `
+    <div class="ob-card">
+      <div class="ob-head"><i data-lucide="disc-3"></i> Welcome to DiscoVibe — set up your toolkit</div>
+      <div class="ob-sub">Pick the tools you want for vibe-coding. DiscoVibe will install them one at a time and prompt for the next.</div>
+      <div class="ob-list"></div>
+      <div class="ob-log" hidden></div>
+      <div class="ob-actions">
+        <button class="ob-skip">Skip for now</button>
+        <button class="ob-install pop-custom" style="flex:0 0 auto">Install selected</button>
+      </div>
+    </div>`;
+  document.body.appendChild(ov);
+  const list = ov.querySelector('.ob-list');
+  const checks = {};
+  INSTALL_TOOLS.forEach((t) => {
+    const row = document.createElement('label'); row.className = 'ob-row';
+    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = (t.id === 'brew' || t.id === 'claude');
+    checks[t.id] = cb;
+    const txt = document.createElement('div'); txt.className = 'ob-txt';
+    txt.innerHTML = `<b>${t.name}</b><span>${t.desc}</span>`;
+    const status = document.createElement('span'); status.className = 'ob-status'; status.dataset.id = t.id;
+    row.append(cb, txt, status);
+    list.appendChild(row);
+  });
+  const log = ov.querySelector('.ob-log');
+  const finish = () => { localStorage.setItem(ONBOARD_KEY, '1'); ov.remove(); };
+  ov.querySelector('.ob-skip').addEventListener('click', finish);
+
+  ov.querySelector('.ob-install').addEventListener('click', async (e) => {
+    const btn = e.currentTarget; btn.disabled = true;
+    const chosen = INSTALL_TOOLS.filter((t) => checks[t.id].checked);
+    if (!chosen.length) { finish(); return; }
+    log.hidden = false; log.textContent = '';
+    for (const t of chosen) {
+      const status = ov.querySelector(`.ob-status[data-id="${t.id}"]`);
+      status.textContent = '⏳ installing…';
+      log.textContent += `\n$ ${t.cmd}\n`;
+      const r = await window.api.installTool(t.id, t.cmd);
+      status.textContent = r && r.ok ? '✓ done' : '✗ failed';
+      log.scrollTop = log.scrollHeight;
+    }
+    btn.textContent = 'Done'; btn.disabled = false;
+    btn.onclick = finish;
+  });
+
+  window.api.onInstallOutput(({ chunk }) => { log.textContent += chunk; log.scrollTop = log.scrollHeight; });
+  renderIcons();
+}
+
+// ===========================================================================
 // Boot
 // ===========================================================================
 (function boot() {
@@ -1267,4 +1482,10 @@ window.addEventListener('resize', () => panes.forEach(fitPane));
     addPane();
   }
   updateDisplayReadout();
+  pollUsage(true);
+
+  // First launch on the primary window → offer to install vibe-coding tools.
+  if (ROLE === 'primary' && !localStorage.getItem(ONBOARD_KEY)) {
+    setTimeout(openOnboarding, 500);
+  }
 })();

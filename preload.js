@@ -20,6 +20,11 @@ contextBridge.exposeInMainWorld('api', {
   // Companion browser
   pickFile: () => ipcRenderer.invoke('pick-file'),
 
+  // Usage bar + first-launch installer
+  runUsage: (command) => ipcRenderer.invoke('run-usage', { command }),
+  installTool: (id, command) => ipcRenderer.invoke('install-tool', { id, command }),
+  onInstallOutput: (cb) => ipcRenderer.on('install-output', (_e, payload) => cb(payload)),
+
   // Displays / multi-window
   getDisplays: () => ipcRenderer.invoke('get-displays'),
   spanDisplays: () => ipcRenderer.invoke('span-displays'),

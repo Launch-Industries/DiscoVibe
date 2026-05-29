@@ -4,7 +4,10 @@ const { app, BrowserWindow, ipcMain, screen, Menu, session, dialog } = require('
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
+const { spawn } = require('child_process');
 const pty = require('node-pty');
+
+function loginShell() { return process.env.SHELL || '/bin/zsh'; }
 
 // Map of paneId -> pty process (ids are globally unique across all windows)
 const ptys = new Map();
@@ -143,6 +146,27 @@ function describeDisplays() {
 }
 
 ipcMain.handle('get-displays', () => describeDisplays());
+
+// Run a usage command (e.g. ccusage) and return its output for the usage bar.
+ipcMain.handle('run-usage', (_e, { command }) => new Promise((resolve) => {
+  if (!command) return resolve({ ok: false });
+  const p = spawn(loginShell(), ['-lc', command], { timeout: 15000 });
+  let out = '', err = '';
+  p.stdout.on('data', (d) => { out += d.toString(); });
+  p.stderr.on('data', (d) => { err += d.toString(); });
+  p.on('close', (code) => resolve({ ok: code === 0, out, err }));
+  p.on('error', (e2) => resolve({ ok: false, err: String(e2.message) }));
+}));
+
+// Install a tool from the first-launch wizard, streaming output back to the renderer.
+ipcMain.handle('install-tool', (event, { id, command }) => new Promise((resolve) => {
+  const p = spawn(loginShell(), ['-lc', command]);
+  const send = (chunk) => { if (!event.sender.isDestroyed()) event.sender.send('install-output', { id, chunk }); };
+  p.stdout.on('data', (d) => send(d.toString()));
+  p.stderr.on('data', (d) => send(d.toString()));
+  p.on('close', (code) => resolve({ ok: code === 0, code }));
+  p.on('error', (err) => { send('\n' + String(err.message) + '\n'); resolve({ ok: false, error: String(err.message) }); });
+}));
 
 // Pick a local file to preview in a pane's companion browser.
 ipcMain.handle('pick-file', async (event) => {
