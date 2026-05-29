@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:;" />
+  <title>TileTerm</title>
+  <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="toolbar">
+    <div class="tb-left">
+      <span class="brand">▦ TileTerm</span>
+      <span id="layout-readout" class="readout">1 pane</span>
+    </div>
+    <div class="tb-right">
+      <button id="btn-mute" class="tb-btn" title="Mute / unmute the attention bell (Cmd+M)">🔔 Bell on</button>
+      <button id="btn-add" class="tb-btn primary" title="New terminal (Cmd+T)">＋ New terminal</button>
+    </div>
+  </div>
+
+  <div id="grid"></div>
+
+  <!-- Per-pane template -->
+  <template id="pane-template">
+    <div class="pane">
+      <div class="pane-header">
+        <span class="grip" title="Drag to reorder">⠿</span>
+        <input class="pane-name" type="text" spellcheck="false" />
+        <span class="pane-spacer"></span>
+        <button class="pane-btn bell-toggle" title="Toggle bell for this pane">🔔</button>
+        <label class="swatch" title="Background color">
+          <input class="color-input" type="color" />
+        </label>
+        <button class="pane-btn close-btn" title="Close this terminal">✕</button>
+      </div>
+      <div class="pane-body"></div>
+    </div>
+  </template>
+
+  <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
+  <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+  <script src="../node_modules/@xterm/addon-web-links/lib/addon-web-links.js"></script>
+  <script src="renderer.js"></script>
+</body>
+</html>
