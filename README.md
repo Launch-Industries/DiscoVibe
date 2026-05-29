@@ -13,7 +13,7 @@ tool inside it (like Claude Code) is waiting on you.
 ## Run / build / deploy
 
 ```bash
-cd ~/Developer/tile-term
+cd ~/Developer/discovibe
 npm install                                  # deps + rebuilds node-pty for Electron
 npm start                                    # run in dev
 CSC_IDENTITY_AUTO_DISCOVERY=false npm run pack   # build dist/mac-arm64/DiscoVibe.app (unsigned)

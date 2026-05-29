@@ -24,7 +24,7 @@ double-click to install. Keep the private key in the same keychain.)
 
 ## 3. Build signed + notarized
 ```
-cd ~/Developer/tile-term
+cd ~/Developer/discovibe
 export APPLE_ID="your-apple-id@email.com"
 export APPLE_APP_SPECIFIC_PASSWORD="abcd-efgh-ijkl-mnop"
 export APPLE_TEAM_ID="K2W6NQ6F66"
