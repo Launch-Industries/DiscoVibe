@@ -17,8 +17,9 @@ let globalFontSize = 13;    // terminal text size — global
 let globalFontFamily = '';  // set after FONTS defined (DEFAULT_FONT)
 let globalTitleCenter = false;
 
-// Out-of-the-box Claude usage command: sums today's tokens from ~/.claude logs via jq.
-const CLAUDE_USAGE_CMD = "find ~/.claude/projects -name '*.jsonl' -mtime -1 -print0 2>/dev/null | xargs -0 cat 2>/dev/null | jq -rs --arg d \"$(date +%Y-%m-%d)\" '[ .[] | select((.timestamp//\"\")[0:10]==$d) | (.message.usage // empty) | ((.input_tokens//0)+(.output_tokens//0)+(.cache_creation_input_tokens//0)+(.cache_read_input_tokens//0)) ] | add // 0 | \"Claude today: \" + (if .>=1000000000 then ((./100000000|floor)/10|tostring)+\"B\" elif .>=1000000 then ((./100000|floor)/10|tostring)+\"M\" elif .>=1000 then ((./1000)|floor|tostring)+\"K\" else tostring end) + \" tok\"'";
+// Out-of-the-box Claude usage command: streams today's tokens from ~/.claude logs
+// (jq per-line, summed by awk — low memory even with very large logs).
+const CLAUDE_USAGE_CMD = "find ~/.claude/projects -name '*.jsonl' -mtime -1 -print0 2>/dev/null | xargs -0 cat 2>/dev/null | jq -rc --arg d \"$(date +%Y-%m-%d)\" 'select((.timestamp//\"\")[0:10]==$d) | (.message.usage // empty) | ((.input_tokens//0)+(.output_tokens//0)+(.cache_creation_input_tokens//0)+(.cache_read_input_tokens//0))' 2>/dev/null | awk '{s+=$1} END{ if(s>=1000000000) printf \"Claude today: %.1fB tok\\n\", s/1000000000; else if(s>=1000000) printf \"Claude today: %.1fM tok\\n\", s/1000000; else if(s>=1000) printf \"Claude today: %dK tok\\n\", s/1000; else printf \"Claude today: %d tok\\n\", s }'";
 
 const settings = {
   autoCollapse: true,
@@ -1205,7 +1206,17 @@ function scheduleSave() {
   saveTimer = setTimeout(() => { try { localStorage.setItem(SESSION_KEY, JSON.stringify({ panes: serializePanes() })); } catch (_) {} }, 400);
 }
 function loadGlobals() { try { return JSON.parse(localStorage.getItem(GLOBALS_KEY)); } catch (_) { return null; } }
-function loadSession() { try { return JSON.parse(localStorage.getItem(SESSION_KEY)); } catch (_) { return null; } }
+function loadSession() {
+  try {
+    let s = JSON.parse(localStorage.getItem(SESSION_KEY));
+    // Migration: earlier builds saved the primary session under an un-suffixed key.
+    if ((!s || !s.panes || !s.panes.length) && WIN_KEY === 'primary') {
+      const old = JSON.parse(localStorage.getItem('tileterm.session.v1'));
+      if (old && old.panes && old.panes.length) s = old;
+    }
+    return s;
+  } catch (_) { return null; }
+}
 function loadLayouts() { try { return JSON.parse(localStorage.getItem(LAYOUTS_KEY)) || {}; } catch (_) { return {}; } }
 function saveNamedLayout(name) {
   const all = loadLayouts();

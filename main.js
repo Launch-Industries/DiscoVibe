@@ -85,7 +85,9 @@ function createWindow(display, role) {
 
   windows.add(win);
   persistWindows();
-  win.on('closed', () => { windows.delete(win); if (!isQuitting) persistWindows(); });
+  // Update the registry only when closing a window while others remain; closing the
+  // last window (or quitting) leaves the snapshot intact so everything reopens next launch.
+  win.on('closed', () => { windows.delete(win); if (!isQuitting && windows.size > 0) persistWindows(); });
   return win;
 }
 
