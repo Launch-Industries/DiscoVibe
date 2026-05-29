@@ -1,8 +1,8 @@
 {
-  "name": "tile-term",
-  "productName": "TileTerm",
-  "version": "1.0.0",
-  "description": "A tiling multi-session terminal for macOS. Equidistant panes, per-pane colors with adaptive text, and an attention bell that flashes + chimes when a tool is waiting on you.",
+  "name": "discovibe",
+  "productName": "DiscoVibe",
+  "version": "1.2.0",
+  "description": "DiscoVibe — a tiling multi-session terminal for macOS. Equidistant panes across every display, per-pane colors with always-legible text, tile themes, voice mode, quick commands, collapsible panes, saved layouts, and an attention bell that flashes + chimes when a tool is waiting on you.",
   "main": "main.js",
   "author": "Monica Colgan",
   "license": "MIT",
@@ -14,8 +14,8 @@
     "pack": "electron-builder --dir"
   },
   "build": {
-    "appId": "biz.launchindustries.tileterm",
-    "productName": "TileTerm",
+    "appId": "biz.launchindustries.discovibe",
+    "productName": "DiscoVibe",
     "files": [
       "main.js",
       "preload.js",
@@ -25,15 +25,29 @@
     "mac": {
       "category": "public.app-category.developer-tools",
       "target": [
-        { "target": "dmg", "arch": ["arm64"] },
-        { "target": "zip", "arch": ["arm64"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64"
+          ]
+        }
       ],
       "icon": "build/icon.icns",
-      "hardenedRuntime": true,
-      "gatekeeperAssess": false
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "DiscoVibe uses the microphone for voice mode, letting you speak commands into the focused terminal.",
+        "NSSpeechRecognitionUsageDescription": "DiscoVibe uses speech recognition to turn your spoken words into terminal commands."
+      }
     },
     "dmg": {
-      "title": "TileTerm"
+      "title": "DiscoVibe"
     }
   },
   "devDependencies": {
@@ -45,6 +59,7 @@
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-web-links": "^0.11.0",
     "@xterm/xterm": "^5.5.0",
+    "lucide": "^1.17.0",
     "node-pty": "^1.0.0"
   }
 }

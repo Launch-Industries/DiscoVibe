@@ -3,48 +3,69 @@
 <head>
   <meta charset="UTF-8" />
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:;" />
-  <title>TileTerm</title>
+        content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self' https:;" />
+  <title>DiscoVibe</title>
   <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <div id="toolbar">
     <div class="tb-left">
-      <span class="brand">▦ TileTerm</span>
+      <span class="brand"><i data-lucide="disc-3"></i> <span class="brand-text">DiscoVibe</span></span>
       <span id="layout-readout" class="readout">1 pane</span>
+      <span id="display-readout" class="readout"><i data-lucide="monitor"></i> 1 display</span>
     </div>
     <div class="tb-right">
-      <button id="btn-theme" class="tb-btn" title="Toggle light / dark mode">🌙 Dark</button>
-      <button id="btn-mute" class="tb-btn" title="Mute / unmute the attention bell (Cmd+M)">🔔 Bell on</button>
-      <button id="btn-add" class="tb-btn primary" title="New terminal (Cmd+T)">＋ New terminal</button>
+      <button id="btn-commands" class="tb-btn" title="Quick commands — store & run your top 10"><i data-lucide="terminal"></i><span>Commands</span></button>
+      <button id="btn-voice" class="tb-btn" title="Toggle voice mode — speak commands into the focused terminal"><i data-lucide="mic"></i><span>Voice</span></button>
+      <button id="btn-span" class="tb-btn" title="Open a terminal window on every display (Cmd+D)"><i data-lucide="monitor"></i><span>Span displays</span></button>
+      <button id="btn-layouts" class="tb-btn" title="Save / load layouts"><i data-lucide="save"></i><span>Layouts</span></button>
+      <button id="btn-tiles" class="tb-btn" title="Pick a tile color theme for new terminals"><i data-lucide="palette"></i><span>Tiles</span></button>
+      <button id="btn-settings" class="tb-btn" title="App settings (auto-collapse, title size)"><i data-lucide="sliders-horizontal"></i><span>Settings</span></button>
+      <button id="btn-theme" class="tb-btn" title="Toggle light / dark mode"><i data-lucide="moon"></i><span>Dark</span></button>
+      <button id="btn-mute" class="tb-btn" title="Mute / unmute the attention bell (Cmd+M)"><i data-lucide="volume-2"></i><span>Bell on</span></button>
+      <input id="add-count" type="number" min="1" max="30" value="1" title="How many terminals to open (max 30 total)" />
+      <button id="btn-add" class="tb-btn primary" title="Open this many terminals (Cmd+T)"><i data-lucide="plus"></i><span>New terminal</span></button>
     </div>
   </div>
 
   <div id="grid"></div>
+  <div id="app-frame"></div>
 
   <!-- Per-pane template -->
   <template id="pane-template">
     <div class="pane">
       <div class="pane-header">
-        <span class="grip" title="Drag to reorder">⠿</span>
+        <span class="grip" draggable="true" title="Drag to reorder"><i data-lucide="grip-vertical"></i></span>
         <input class="pane-name" type="text" spellcheck="false" />
         <span class="pane-spacer"></span>
-        <button class="pane-btn title-smaller" title="Smaller title">A−</button>
-        <button class="pane-btn title-bigger" title="Larger title">A＋</button>
-        <button class="pane-btn bell-toggle" title="Toggle bell for this pane">🔔</button>
-        <label class="swatch" title="Background color">
-          <input class="color-input" type="color" />
-        </label>
-        <button class="pane-btn close-btn" title="Close this terminal">✕</button>
+        <button class="pane-btn swatch-btn" title="Background color"></button>
+        <button class="pane-btn view-toggle" title="Toggle terminal / companion browser"><i data-lucide="globe"></i></button>
+        <button class="pane-btn bell-toggle" title="Toggle bell for this pane"><i data-lucide="bell"></i></button>
+        <button class="pane-btn collapse-btn" title="Collapse / store this terminal (keeps it running)"><i data-lucide="minimize-2"></i></button>
+        <button class="pane-btn close-btn" title="Close this terminal"><i data-lucide="x"></i></button>
+        <input class="color-input" type="color" hidden />
       </div>
-      <div class="pane-body"></div>
+      <div class="pane-body">
+        <div class="term-layer"></div>
+        <div class="web-layer">
+          <div class="web-bar">
+            <button class="web-btn web-back" title="Back"><i data-lucide="arrow-left"></i></button>
+            <button class="web-btn web-reload" title="Reload"><i data-lucide="rotate-cw"></i></button>
+            <input class="web-url" type="text" spellcheck="false" placeholder="localhost:3000  ·  https://…  ·  or Open file →" />
+            <button class="web-btn web-go" title="Go"><i data-lucide="corner-down-left"></i></button>
+            <button class="web-btn web-open" title="Open a local file (HTML, image, PDF…)"><i data-lucide="folder-open"></i></button>
+          </div>
+          <webview class="web-view"></webview>
+        </div>
+      </div>
     </div>
   </template>
 
   <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
   <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
   <script src="../node_modules/@xterm/addon-web-links/lib/addon-web-links.js"></script>
+  <script src="../node_modules/lucide/dist/umd/lucide.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>
