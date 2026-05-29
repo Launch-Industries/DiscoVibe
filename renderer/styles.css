@@ -255,6 +255,15 @@ body.dim-inactive .pane:not(.focused) .pane-body { filter: brightness(var(--dim-
 .pane-name:focus { background: rgba(127,127,127,.22); }
 .pane-name.centered { flex: 1 1 auto; text-align: center; }
 .pane-spacer { flex: 1 1 auto; }
+
+/* AI-model badge in the header */
+.model-badge {
+  display: none; flex: 0 0 auto;
+  font-size: 10px; font-weight: 800; letter-spacing: .4px; text-transform: uppercase;
+  padding: 1px 7px; border-radius: 10px;
+  background: rgba(127,127,127,.28); border: 1px solid currentColor;
+}
+.model-badge.show { display: inline-block; }
 .pane-name.centered + .pane-spacer { flex: 0 0 0; }
 
 .pane-btn {

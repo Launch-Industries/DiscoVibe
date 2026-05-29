@@ -33,7 +33,9 @@ const settings = {
   usageCommand: CLAUDE_USAGE_CMD,
   usageIntervalSec: 30,
   projectsDir: '',           // new terminals open here (e.g. ~/Developer)
-  openInApp: true            // open clicked links in the pane's companion browser
+  openInApp: true,           // open clicked links in the pane's companion browser
+  nameFromTitle: true,       // rename a pane when a program sets the terminal title (OSC)
+  showModel: true            // show the detected AI model (Opus/Sonnet/…) in the header
 };
 
 // Optional AI clean-up of dictated speech (OpenAI-compatible endpoint, e.g. free Qwen on
@@ -371,6 +373,16 @@ function createPane(opts = {}) {
   term.onResize(({ cols, rows }) => window.api.resize(id, cols, rows));
   term.onBell(() => triggerAttention(pane));
 
+  // Follow the terminal title (OSC) — lets a program (or you) rename the window.
+  term.onTitleChange((title) => {
+    if (!settings.nameFromTitle) return;
+    const t = (title || '').trim();
+    if (t.length < 2 || t.length > 60) return;
+    if (/^~?\//.test(t) && !/\s/.test(t)) return;          // ignore bare paths
+    if (/^\S+@\S+/.test(t)) return;                          // ignore user@host
+    pane.name = t; pane.nameInput.value = t; pane.manualName = false; scheduleSave();
+  });
+
   // Click to position the shell cursor (translate the click into arrow keys).
   termLayer.addEventListener('mouseup', () => {
     if (!settings.clickToMove) return;
@@ -448,6 +460,11 @@ function createPane(opts = {}) {
   const offerEl = document.createElement('span'); offerEl.className = 'rename-offer';
   nameInput.insertAdjacentElement('afterend', offerEl);
   pane.offerEl = offerEl;
+
+  // AI-model badge (detected from the pane's recent output)
+  const modelBadge = document.createElement('span'); modelBadge.className = 'model-badge';
+  offerEl.insertAdjacentElement('afterend', modelBadge);
+  pane.modelBadge = modelBadge;
 
   // Per-window note ("what I'm working on") — saved with the session
   noteBtn.classList.toggle('has-note', !!pane.note);
@@ -769,6 +786,35 @@ function showRenameOffer(pane, suggestion) {
   no.addEventListener('click', () => { pane._dismissed = suggestion; el.classList.remove('show'); });
   el.append(ok, no); el.classList.add('show'); renderIcons();
 }
+// Detect which AI model a pane is using by scanning its recent output.
+const MODEL_PATTERNS = [
+  [/\bclaude[- ]?opus\b|\bopus\b/i, 'Opus'],
+  [/\bclaude[- ]?sonnet\b|\bsonnet\b/i, 'Sonnet'],
+  [/\bclaude[- ]?haiku\b|\bhaiku\b/i, 'Haiku'],
+  [/\bgpt-?5\b/i, 'GPT-5'], [/\bgpt-?4o\b/i, 'GPT-4o'], [/\bo3\b/i, 'o3'],
+  [/\bcodex\b/i, 'Codex'], [/\bgemini\b/i, 'Gemini'], [/\bqwen\b/i, 'Qwen'],
+  [/\bllama\b/i, 'Llama'], [/\bmistral\b/i, 'Mistral'], [/\bgrok\b/i, 'Grok']
+];
+function detectModel(pane) {
+  const buf = pane.term.buffer.active;
+  const start = Math.max(0, buf.length - 60);
+  for (let i = buf.length - 1; i >= start; i--) {       // newest line first
+    const ln = buf.getLine(i); if (!ln) continue;
+    const s = ln.translateToString(true);
+    if (!s.trim()) continue;
+    for (const [re, label] of MODEL_PATTERNS) if (re.test(s)) return label;
+  }
+  return '';
+}
+function updateModelBadge(pane) {
+  const label = settings.showModel ? detectModel(pane) : '';
+  if (pane._model === label) return;
+  pane._model = label;
+  pane.modelBadge.textContent = label;
+  pane.modelBadge.classList.toggle('show', !!label);
+}
+setInterval(() => { for (const p of panes) updateModelBadge(p); }, 4000);
+
 let autoNameBusy = false;
 setInterval(async () => {
   if (!settings.autoName || !voiceAI.apiKey || autoNameBusy) return;
@@ -853,6 +899,8 @@ function openPreferences() {
   card.appendChild(checkRow('Click to place cursor', () => settings.clickToMove, (v) => { settings.clickToMove = v; settingsChanged(); }));
   card.appendChild(checkRow('Switch panes with Tab (off = shell completion)', () => settings.tabSwitch, (v) => { settings.tabSwitch = v; settingsChanged(); }));
   card.appendChild(checkRow('Auto-name terminals from activity (AI)', () => settings.autoName, (v) => { settings.autoName = v; settingsChanged(); }));
+  card.appendChild(checkRow('Set window name from terminal title', () => settings.nameFromTitle, (v) => { settings.nameFromTitle = v; settingsChanged(); }));
+  card.appendChild(checkRow('Show AI model in header (Opus/Sonnet/…)', () => settings.showModel, (v) => { settings.showModel = v; settingsChanged(); panes.forEach(updateModelBadge); }));
 
   sec('Folders & links');
   card.appendChild(textRow('Projects folder', () => settings.projectsDir, (v) => { settings.projectsDir = v; saveGlobals(); }, '~/Developer', 'text', true));
