@@ -1,0 +1,90 @@
+{
+  "_comment": "DiscoVibe remote tool definitions. The app fetches this file on launch and patches its built-in tool list. To push a fix to ALL users: edit a command below, BUMP the version number, and commit to the main branch. Users get the fix the next time they open DiscoVibe — no new app download needed.",
+  "version": 1,
+
+  "tools": {
+    "brew":     { "cmd": "/bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"" },
+    "clt":      { "cmd": "xcode-select --install" },
+    "git":      { "cmd": "brew install git" },
+    "node":     { "cmd": "brew install node" },
+    "fnm":      { "cmd": "brew install fnm" },
+    "claude":   { "cmd": "npm install -g @anthropic-ai/claude-code" },
+    "codex":    { "cmd": "npm install -g @openai/codex" },
+    "aider":    { "cmd": "brew install aider" },
+    "gemini":   { "cmd": "npm install -g @google/gemini-cli" },
+    "kiro":     { "cmd": "brew install --cask kiro-cli", "check": "command -v kiro-cli" },
+    "pnpm":     { "cmd": "npm install -g pnpm" },
+    "bun":      { "cmd": "curl -fsSL https://bun.sh/install | bash" },
+    "vercel":   { "cmd": "npm install -g vercel" },
+    "supabase": { "cmd": "brew install supabase/tap/supabase" },
+    "railway":  { "cmd": "npm install -g @railway/cli" },
+    "stripe":   { "cmd": "brew install stripe/stripe-cli/stripe" },
+    "gh":       { "cmd": "brew install gh" },
+    "rg":       { "cmd": "brew install ripgrep" },
+    "jq":       { "cmd": "brew install jq" },
+    "python":   { "cmd": "brew install python" }
+  },
+
+  "command_groups": {
+    "claude": {
+      "commands": [
+        { "label": "Launch",              "cmd": "claude" },
+        { "label": "Install / update",    "cmd": "npm install -g @anthropic-ai/claude-code" },
+        { "label": "Compact context",     "cmd": "/compact" },
+        { "label": "Clear conversation",  "cmd": "/clear" },
+        { "label": "Show memory",         "cmd": "/memory" },
+        { "label": "Review changes",      "cmd": "/review" },
+        { "label": "Health check",        "cmd": "/doctor" },
+        { "label": "Today's usage",       "cmd": "ccusage --today" }
+      ]
+    },
+    "codex": {
+      "commands": [
+        { "label": "Launch",                "cmd": "codex" },
+        { "label": "Install / update",      "cmd": "npm install -g @openai/codex" },
+        { "label": "Full auto mode",        "cmd": "codex --approval-mode full-auto" },
+        { "label": "Ask (non-interactive)", "cmd": "codex -q \"\"" }
+      ]
+    },
+    "aider": {
+      "commands": [
+        { "label": "Launch",               "cmd": "aider" },
+        { "label": "Install (brew)",       "cmd": "brew install aider" },
+        { "label": "Launch with Claude",   "cmd": "aider --model claude-sonnet-4-5" },
+        { "label": "Add files to context", "cmd": "/add" },
+        { "label": "Undo last change",     "cmd": "/undo" },
+        { "label": "Clear history",        "cmd": "/clear" },
+        { "label": "Show diff",            "cmd": "/diff" }
+      ]
+    },
+    "kiro": {
+      "commands": [
+        { "label": "Launch",              "cmd": "kiro-cli" },
+        { "label": "Install / update",    "cmd": "brew install --cask kiro-cli" },
+        { "label": "Open current folder", "cmd": "kiro-cli ." },
+        { "label": "Health check",        "cmd": "kiro-cli doctor" }
+      ]
+    },
+    "gemini": {
+      "commands": [
+        { "label": "Launch",               "cmd": "gemini" },
+        { "label": "Install / update",     "cmd": "npm install -g @google/gemini-cli" },
+        { "label": "Non-interactive prompt", "cmd": "gemini -p \"\"" },
+        { "label": "Clear conversation",   "cmd": "/clear" },
+        { "label": "Help",                 "cmd": "/help" }
+      ]
+    },
+    "vercel": {
+      "commands": [
+        { "label": "Deploy (preview)",    "cmd": "vercel" },
+        { "label": "Deploy (production)", "cmd": "vercel --prod" },
+        { "label": "Install / update",    "cmd": "npm install -g vercel" },
+        { "label": "Login",               "cmd": "vercel login" },
+        { "label": "Dev server",          "cmd": "vercel dev" },
+        { "label": "Pull env vars",       "cmd": "vercel env pull" },
+        { "label": "View logs",           "cmd": "vercel logs" },
+        { "label": "List deployments",    "cmd": "vercel ls" }
+      ]
+    }
+  }
+}

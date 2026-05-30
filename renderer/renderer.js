@@ -143,6 +143,7 @@ function lic(name) { return `<i data-lucide="${name}"></i>`; }
 function renderIcons() { try { window.lucide && window.lucide.createIcons(); } catch (_) {} }
 function setBtnIcon(btn, name, label) {
   btn.innerHTML = lic(name) + (label != null ? `<span>${label}</span>` : '');
+  if (label != null) { btn.title = label; btn.dataset.tooltip = label; }
   renderIcons();
 }
 
@@ -235,6 +236,9 @@ function playChime() {
 const MAX_CHIMES = 6, CHIME_INTERVAL = 4000;
 function triggerAttention(pane) {
   if (!alertsEnabled || !pane.bellOn) return;
+  // Ignore bells that fire within 2 s of a keypress — these are shell feedback
+  // (tab completion, mode-switch chimes) not an AI waiting for the user.
+  if (Date.now() - pane.lastActivity < 2000) return;
   pane.el.classList.add('attn');
   if (!pane.attnTimer) {
     pane.chimeCount = 0;
@@ -338,9 +342,8 @@ function applyColor(pane, color) {
 }
 function applyTitleSizeToPane(pane, size) {
   pane.nameInput.style.fontSize = size + 'px';
-  const headerH = Math.max(34, Math.round(size * 1.6) + 8);
-  pane.headerEl.style.height = headerH + 'px';
-  pane.headerEl.style.flex = `0 0 ${headerH}px`;
+  pane.headerEl.style.height = '';        // let the 2-row layout size itself
+  pane.headerEl.style.flex = '0 0 auto';
 }
 // Global: apply to every pane (active + stored) and optionally sync other windows.
 function applyGlobalTitleSize(size, fromRemote) {
@@ -414,8 +417,17 @@ function createPane(opts = {}) {
     webview, webUrlInput, webMode: false, webUrl: opts.webUrl || '',
     bellOn: opts.bellOn !== false,
     note: opts.note || '', manualName: opts.manual !== undefined ? !!opts.manual : !!opts.name, noteBtn,
-    collapsed: false, attnTimer: null, chimeCount: 0, lastActivity: Date.now()
+    collapsed: false, attnTimer: null, chimeCount: 0, lastActivity: Date.now(),
+    cwd: opts.cwd || settings.projectsDir || '',   // updated by OSC 7 or cd detection
+    detectedTool: null,
   };
+  // OSC 7: shell emits \x1b]7;file:///path\x07 after each prompt — track current directory
+  if (term.parser && term.parser.registerOscHandler) {
+    term.parser.registerOscHandler(7, (data) => {
+      try { pane.cwd = decodeURIComponent(new URL(data).pathname); } catch (_) {}
+      return false;
+    });
+  }
   panes.push(pane);
 
   applyColor(pane, color);
@@ -456,6 +468,21 @@ function createPane(opts = {}) {
     const dCol = tx - cx;
     if (!dCol) return;
     window.api.input(id, (dCol > 0 ? '\x1b[C' : '\x1b[D').repeat(Math.abs(dCol)));
+  });
+
+  // Drag & drop files from Finder → insert their shell-escaped paths at the cursor.
+  const hasFiles = (e) => e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files');
+  termLayer.addEventListener('dragover', (e) => { if (hasFiles(e)) { e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = 'copy'; node.classList.add('file-drop'); } });
+  termLayer.addEventListener('dragleave', (e) => { if (!termLayer.contains(e.relatedTarget)) node.classList.remove('file-drop'); });
+  termLayer.addEventListener('drop', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault(); e.stopPropagation();
+    node.classList.remove('file-drop');
+    const paths = Array.from(e.dataTransfer.files).map((f) => window.api.getPathForFile(f)).filter(Boolean);
+    if (!paths.length) return;
+    const escaped = paths.map((p) => "'" + p.replace(/'/g, "'\\''") + "'").join(' ') + ' ';
+    window.api.input(id, escaped);
+    setFocused(id); term.focus(); pane.lastActivity = Date.now();
   });
 
   // Companion browser
@@ -499,11 +526,21 @@ function createPane(opts = {}) {
   term.attachCustomKeyEventHandler((e) => {
     if (e.type !== 'keydown' || e.key !== 'Tab') return true;
     const plain = !e.ctrlKey && !e.altKey && !e.metaKey;
-    if (e.ctrlKey || (settings.tabSwitch && plain)) { cyclePane(e.shiftKey ? -1 : 1); return false; }
+    // Ctrl+Tab / Ctrl+Shift+Tab always cycle panes.
+    if (e.ctrlKey) { cyclePane(e.shiftKey ? -1 : 1); return false; }
+    // tabSwitch: only plain Tab (no Shift) cycles forward. Shift+Tab always passes through
+    // so Claude Code's plan/auto/accept-edits mode switcher works.
+    if (settings.tabSwitch && plain && !e.shiftKey) { cyclePane(1); return false; }
     return true;
   });
 
-  const acknowledge = () => { setFocused(id); clearAttention(pane); pane.lastActivity = Date.now(); };
+  const acknowledge = (e) => {
+    setFocused(id); clearAttention(pane); pane.lastActivity = Date.now();
+    ensureAudio();
+    // Focus the terminal unless the click landed on an interactive element (input/textarea)
+    // that needs to retain its own focus (e.g. the rename field, note popover).
+    if (!e || !e.target || !e.target.closest('input, textarea')) term.focus();
+  };
   node.addEventListener('mousedown', acknowledge);
   if (term.textarea) term.textarea.addEventListener('focus', acknowledge);
 
@@ -657,7 +694,10 @@ function collapsePane(pane, silent) {
   pane.collapsed = true;
   clearAttention(pane);
   storedHost.appendChild(pane.el);     // keep alive, out of layout
-  if (focusedId === pane.id && panes.length) setFocused(panes[Math.max(0, i - 1)].id);
+  if (focusedId === pane.id && panes.length) {
+    setFocused(panes[Math.max(0, i - 1)].id);
+    setTimeout(() => { const f = panes.find((p) => p.id === focusedId); if (f) f.term.focus(); }, 30);
+  }
   renderTray();
   relayout();
   if (!silent) scheduleSave();
@@ -873,6 +913,70 @@ function updateModelBadge(pane) {
 }
 setInterval(() => { for (const p of panes) updateModelBadge(p); }, 4000);
 
+// ===========================================================================
+// AI tool detection + session resume
+// ===========================================================================
+const TOOL_PATTERNS = [
+  [/Claude Code|✻\s|> claude\b/i,  'claude'],
+  [/Codex Agent|codex\.openai/i,   'codex'],
+  [/Aider\s+v\d/i,                 'aider'],
+  [/Gemini CLI|Google Gemini/i,    'gemini'],
+  [/Kiro\s*[–-]/i,                 'kiro'],
+];
+const TOOL_DISPLAY = { claude: 'Claude Code', codex: 'Codex CLI', aider: 'Aider', gemini: 'Gemini CLI', kiro: 'Kiro CLI' };
+
+function detectTool(pane) {
+  const buf = pane.term.buffer.active;
+  const start = Math.max(0, buf.length - 60);
+  for (let i = buf.length - 1; i >= start; i--) {
+    const ln = buf.getLine(i); if (!ln) continue;
+    const s = ln.translateToString(true); if (!s.trim()) continue;
+    for (const [re, tool] of TOOL_PATTERNS) if (re.test(s)) return tool;
+  }
+  return null;
+}
+
+function buildResumeCmd(tool, cwd) {
+  const cd = cwd ? `cd ${JSON.stringify(cwd)} && ` : '';
+  const cmds = { claude: 'claude -c', codex: 'codex', aider: 'aider', gemini: 'gemini', kiro: 'kiro-cli' };
+  return cd + (cmds[tool] || tool);
+}
+
+const RESUME_KEY = 'discovibe.resume.v1';
+function loadResume() { try { return JSON.parse(localStorage.getItem(RESUME_KEY)) || {}; } catch (_) { return {}; } }
+function saveResume(d) { try { localStorage.setItem(RESUME_KEY, JSON.stringify(d)); } catch (_) {} }
+function clearResumeEntry(cwd) { const d = loadResume(); delete d[cwd]; saveResume(d); }
+
+function maybeShowResumeBanner(pane) {
+  if (!pane.cwd) return;
+  const resume = loadResume();
+  const entry = resume[pane.cwd];
+  if (!entry) return;
+  if (Date.now() - entry.timestamp > 7 * 24 * 60 * 60 * 1000) { clearResumeEntry(pane.cwd); return; }
+  const banner = pane.el.querySelector('.resume-banner');
+  if (!banner) return;
+  const cwdShort = entry.cwd.replace(/^\/Users\/[^/]+/, '~');
+  banner.querySelector('.resume-text').textContent =
+    `Resume ${TOOL_DISPLAY[entry.tool] || entry.tool} session · ${cwdShort}`;
+  banner.hidden = false;
+  renderIcons();
+  banner.querySelector('.resume-run-btn').onclick = () => {
+    window.api.input(pane.id, entry.cmd + '\r'); pane.lastActivity = Date.now();
+    banner.hidden = true; clearResumeEntry(pane.cwd); pane.term.focus();
+  };
+  banner.querySelector('.resume-dismiss-btn').onclick = () => {
+    banner.hidden = true; clearResumeEntry(pane.cwd);
+  };
+}
+
+// Poll for tool detection alongside model badge updates
+setInterval(() => {
+  for (const p of panes) {
+    const tool = detectTool(p);
+    if (tool && !p.detectedTool) p.detectedTool = tool;
+  }
+}, 4000);
+
 let autoNameBusy = false;
 async function autoNamePass(force) {
   if (!settings.autoName || !voiceAI.apiKey || autoNameBusy) return;
@@ -980,37 +1084,109 @@ function openPreferences() {
 
   sec('Usage bar');
   card.appendChild(checkRow('Show usage bar', () => settings.usageEnabled, (v) => { settings.usageEnabled = v; saveGlobals(); pollUsage(true); }));
-  card.appendChild(textRow('Command', () => settings.usageCommand, (v) => { settings.usageCommand = v; saveGlobals(); pollUsage(true); }, ''));
-  card.appendChild(stepperRow('Refresh (sec)', () => settings.usageIntervalSec + 's',
-    () => { settings.usageIntervalSec = Math.max(5, settings.usageIntervalSec - 5); saveGlobals(); },
-    () => { settings.usageIntervalSec = Math.min(600, settings.usageIntervalSec + 5); saveGlobals(); }));
-  const uNote = document.createElement('div'); uNote.className = 'layout-empty';
-  uNote.textContent = 'Defaults to your live Claude token usage (today). Any “NN%” in the output fills the bar.';
-  card.appendChild(uNote);
+  card.appendChild(textRow('Shell command', () => settings.usageCommand, (v) => { settings.usageCommand = v; saveGlobals(); pollUsage(true); }, 'ccusage --today'));
 
   sec('Voice (speech-to-text)');
   card.appendChild(textRow('STT key', () => voiceAI.sttKey, (v) => { voiceAI.sttKey = v; saveGlobals(); }, '', 'password'));
   card.appendChild(textRow('STT model', () => voiceAI.sttModel, (v) => { voiceAI.sttModel = v; saveGlobals(); }, ''));
   card.appendChild(textRow('STT endpoint', () => voiceAI.sttUrl, (v) => { voiceAI.sttUrl = v; saveGlobals(); }, ''));
   const sNote = document.createElement('div'); sNote.className = 'layout-empty';
-  sNote.textContent = 'Click the mic to record, click again to send. Default = free Groq Whisper (console.groq.com).';
+  sNote.innerHTML = 'Click the mic to record, click again to send. Free Groq Whisper key: <a class="prefs-link" href="#" data-url="https://console.groq.com/keys">console.groq.com/keys</a>';
   card.appendChild(sNote);
   card.appendChild(checkRow('Also AI-clean speech into commands', () => voiceAI.enabled, (v) => { voiceAI.enabled = v; saveGlobals(); }));
   card.appendChild(textRow('AI key', () => voiceAI.apiKey, (v) => { voiceAI.apiKey = v; autoConfigAI(v); saveGlobals(); if (settings.autoName) setTimeout(() => autoNamePass(true), 400); }, 'paste a key — endpoint auto-detected', 'password'));
   card.appendChild(textRow('AI model', () => voiceAI.model, (v) => { voiceAI.model = v; saveGlobals(); }, ''));
   card.appendChild(textRow('AI endpoint', () => voiceAI.baseUrl, (v) => { voiceAI.baseUrl = v; saveGlobals(); }, ''));
   const vNote = document.createElement('div'); vNote.className = 'layout-empty';
-  vNote.textContent = 'Same AI key powers auto-naming (updates the header every ~30s). Paste a Gemini (AIza…), OpenRouter (sk-or-…), Groq (gsk_…) or OpenAI (sk-…) key — the endpoint sets itself. Stored locally on this Mac.';
+  vNote.innerHTML = 'Same key powers auto-naming. Paste a Groq (gsk_…), OpenRouter (sk-or-…), Gemini (AIza…), or OpenAI (sk-…) key — endpoint sets itself. For Qwen: <a class="prefs-link" href="#" data-url="https://openrouter.ai/models/qwen/qwen3-235b-a22b">openrouter.ai Qwen3</a>. Stored locally.';
   card.appendChild(vNote);
 
   const actions = document.createElement('div'); actions.className = 'ob-actions';
-  const spacer = document.createElement('span');
+  const toolkit = document.createElement('button'); toolkit.className = 'pop-custom';
+  toolkit.innerHTML = lic('wrench') + '<span>Set up toolkit…</span>';
+  toolkit.addEventListener('click', () => { ov.remove(); openOnboarding(); });
   const done = document.createElement('button'); done.className = 'pop-custom'; done.style.flex = '0 0 auto'; done.textContent = 'Done';
   done.addEventListener('click', () => ov.remove());
-  actions.append(spacer, done); card.appendChild(actions);
+  actions.append(toolkit, done); card.appendChild(actions);
+
+  // Open external links (Groq, Qwen, etc.) in the system browser
+  card.addEventListener('click', (e) => {
+    const a = e.target.closest('a.prefs-link');
+    if (a) { e.preventDefault(); window.api.openExternal(a.dataset.url); }
+  });
 
   document.body.appendChild(ov);
   renderIcons();
+}
+
+function openFeedback() {
+  if (document.getElementById('feedback-modal')) return;
+  const ov = document.createElement('div'); ov.id = 'feedback-modal';
+  const card = document.createElement('div'); card.className = 'ob-card'; card.style.maxWidth = '440px';
+  ov.appendChild(card);
+  ov.addEventListener('mousedown', (e) => { if (e.target === ov) ov.remove(); });
+
+  const head = document.createElement('div'); head.className = 'ob-head';
+  head.innerHTML = lic('message-circle') + ' Share feedback';
+  card.appendChild(head);
+  const sub = document.createElement('div'); sub.className = 'ob-sub';
+  sub.textContent = 'What\'s working well? What could be better? We read every note.';
+  card.appendChild(sub);
+
+  // Rating
+  const ratingRow = document.createElement('div'); ratingRow.style.cssText = 'display:flex;gap:8px;align-items:center;margin-bottom:12px;';
+  const ratingLbl = document.createElement('span'); ratingLbl.textContent = 'Rating:'; ratingLbl.style.fontWeight = '600';
+  ratingRow.appendChild(ratingLbl);
+  let rating = 0;
+  const stars = [];
+  [1, 2, 3, 4, 5].forEach((n) => {
+    const s = document.createElement('button'); s.className = 'feedback-star'; s.textContent = '☆'; s.dataset.n = n;
+    s.addEventListener('click', () => { rating = n; stars.forEach((st) => { st.textContent = +st.dataset.n <= n ? '★' : '☆'; st.classList.toggle('lit', +st.dataset.n <= n); }); });
+    stars.push(s); ratingRow.appendChild(s);
+  });
+  card.appendChild(ratingRow);
+
+  // Message
+  const msgLbl = document.createElement('div'); msgLbl.textContent = 'Message'; msgLbl.style.cssText = 'font-weight:600;font-size:13px;margin-bottom:4px;';
+  card.appendChild(msgLbl);
+  const ta = document.createElement('textarea'); ta.rows = 5;
+  ta.placeholder = 'Tell us what you love, what\'s confusing, or what you\'d like to see next…';
+  ta.style.cssText = 'width:100%;resize:vertical;background:var(--btn-bg);color:inherit;border:1px solid var(--pop-line);border-radius:8px;padding:8px;font:inherit;font-size:13px;box-sizing:border-box;';
+  card.appendChild(ta);
+
+  // Email
+  const emailLbl = document.createElement('div'); emailLbl.textContent = 'Your email (optional)'; emailLbl.style.cssText = 'font-weight:600;font-size:13px;margin:10px 0 4px;';
+  card.appendChild(emailLbl);
+  const emailIn = document.createElement('input'); emailIn.type = 'email'; emailIn.placeholder = 'for follow-up questions';
+  emailIn.style.cssText = 'width:100%;background:var(--btn-bg);color:inherit;border:1px solid var(--pop-line);border-radius:8px;padding:8px;font:inherit;font-size:13px;box-sizing:border-box;';
+  card.appendChild(emailIn);
+
+  const actions = document.createElement('div'); actions.className = 'ob-actions'; actions.style.marginTop = '16px';
+  const cancel = document.createElement('button'); cancel.className = 'ob-skip'; cancel.textContent = 'Cancel';
+  cancel.addEventListener('click', () => ov.remove());
+  const send = document.createElement('button'); send.className = 'pop-custom'; send.style.flex = '0 0 auto';
+  send.innerHTML = lic('send') + '<span>Send feedback</span>';
+  send.addEventListener('click', async () => {
+    const msg = ta.value.trim();
+    if (!msg) { ta.focus(); return; }
+    const body = (rating ? `Rating: ${'★'.repeat(rating)}${'☆'.repeat(5 - rating)}\n\n` : '') + msg + (emailIn.value.trim() ? `\n\nReply to: ${emailIn.value.trim()}` : '');
+    // Copy to clipboard so the user always has a fallback
+    try { await navigator.clipboard.writeText(`To: dev@launchindustries.biz\nSubject: DiscoVibe Feedback\n\n${body}`); } catch (_) {}
+    // Try to open in email client
+    window.api.openExternal(`mailto:dev@launchindustries.biz?subject=${encodeURIComponent('DiscoVibe Feedback')}&body=${encodeURIComponent(body)}`);
+    // Show confirmation inside the card
+    card.innerHTML = `<div class="ob-head">${lic('check-circle')} Thanks for the feedback!</div>
+      <div class="ob-sub">Your email client should have opened. If not, the feedback was copied to your clipboard — paste it in an email to <b>dev@launchindustries.biz</b>.</div>
+      <div class="ob-actions" style="margin-top:16px"><button class="pop-custom" style="flex:0 0 auto">Close</button></div>`;
+    card.querySelector('button').addEventListener('click', () => ov.remove());
+    renderIcons();
+  });
+  actions.append(cancel, send);
+  card.appendChild(actions);
+
+  document.body.appendChild(ov);
+  renderIcons();
+  setTimeout(() => ta.focus(), 60);
 }
 
 function openLayouts(anchor) {
@@ -1171,19 +1347,167 @@ function openClips(anchor) {
 }
 
 const COMMANDS_KEY = 'tileterm.commands.v1';
-function loadCommands() { try { return JSON.parse(localStorage.getItem(COMMANDS_KEY)) || []; } catch (_) { return []; } }
-function saveCommands(list) { try { localStorage.setItem(COMMANDS_KEY, JSON.stringify(list.slice(0, 10))); } catch (_) {} }
+const DEFAULT_COMMANDS = [
+  'claude',           // Claude Code (Anthropic)
+  'codex',            // Codex CLI (OpenAI)
+  'aider',            // Aider (open-source AI coding)
+  'gemini',           // Gemini CLI (Google)
+  '/compact',         // Claude Code: compact context
+  '/clear',           // Claude Code: clear conversation
+  'ccusage --today',  // Claude token usage today
+  'What are we working on? Briefly recap our current task and what to do next.',
+  'Please remember what we\'ve been working on and save it to memory',
+  'Please save a resume note: what we built today and what to work on next',
+  'clear',            // Clear terminal screen
+];
+function loadCommands() {
+  try {
+    const stored = localStorage.getItem(COMMANDS_KEY);
+    if (stored === null) return DEFAULT_COMMANDS.slice();   // first run: pre-seed
+    return JSON.parse(stored) || [];
+  } catch (_) { return []; }
+}
+function saveCommands(list) { try { localStorage.setItem(COMMANDS_KEY, JSON.stringify(list.slice(0, 15))); } catch (_) {} }
 function runCommand(cmd) {
   const pane = panes.find((p) => p.id === focusedId) || panes[0];
   if (!pane) return;
+  // Confirm before destructive clear commands so the user doesn't lose context by accident.
+  const isClear = /^\/?(clear|reset)$/i.test(cmd.trim());
+  if (isClear && !window.confirm(`Run "${cmd}" in the focused terminal?`)) return;
   window.api.input(pane.id, cmd + '\r');
   pane.lastActivity = Date.now();
   pane.term.focus();
 }
+const AI_COMMAND_GROUPS = [
+  {
+    id: 'claude', name: 'Claude Code', color: '#b86bd8',
+    commands: [
+      { label: 'Launch',               cmd: 'claude' },
+      { label: 'Install / update',     cmd: 'npm install -g @anthropic-ai/claude-code' },
+      { label: 'Compact context',      cmd: '/compact' },
+      { label: 'Clear conversation',   cmd: '/clear' },
+      { label: 'Show memory',          cmd: '/memory' },
+      { label: 'Review changes',       cmd: '/review' },
+      { label: 'Health check',         cmd: '/doctor' },
+      { label: "Today's usage",        cmd: 'ccusage --today' },
+    ]
+  },
+  {
+    id: 'codex', name: 'Codex CLI', color: '#10a37f',
+    commands: [
+      { label: 'Launch',               cmd: 'codex' },
+      { label: 'Install / update',     cmd: 'npm install -g @openai/codex' },
+      { label: 'Full auto mode',       cmd: 'codex --approval-mode full-auto' },
+      { label: 'Ask (non-interactive)',cmd: 'codex -q ""' },
+    ]
+  },
+  {
+    id: 'aider', name: 'Aider', color: '#3fb6a8',
+    commands: [
+      { label: 'Launch',               cmd: 'aider' },
+      { label: 'Install (pip)',        cmd: 'pip install aider-chat' },
+      { label: 'Install (brew)',       cmd: 'brew install aider' },
+      { label: 'Launch with Claude',   cmd: 'aider --model claude-sonnet-4-5' },
+      { label: 'Add files to context', cmd: '/add' },
+      { label: 'Undo last change',     cmd: '/undo' },
+      { label: 'Clear history',        cmd: '/clear' },
+      { label: 'Show diff',            cmd: '/diff' },
+    ]
+  },
+  {
+    id: 'kiro', name: 'Kiro', color: '#FF9900',
+    commands: [
+      { label: 'Launch',               cmd: 'kiro-cli' },
+      { label: 'Install / update',     cmd: 'brew install --cask kiro-cli' },
+      { label: 'Open current folder',  cmd: 'kiro-cli .' },
+      { label: 'Health check',         cmd: 'kiro-cli doctor' },
+    ]
+  },
+  {
+    id: 'gemini', name: 'Gemini CLI', color: '#4285F4',
+    commands: [
+      { label: 'Launch',               cmd: 'gemini' },
+      { label: 'Install / update',     cmd: 'npm install -g @google/gemini-cli' },
+      { label: 'Non-interactive prompt', cmd: 'gemini -p ""' },
+      { label: 'Clear conversation',   cmd: '/clear' },
+      { label: 'Help',                 cmd: '/help' },
+    ]
+  },
+  {
+    id: 'vercel', name: 'Vercel CLI', color: '#0070f3',
+    commands: [
+      { label: 'Deploy (preview)',     cmd: 'vercel' },
+      { label: 'Deploy (production)',  cmd: 'vercel --prod' },
+      { label: 'Install / update',     cmd: 'npm install -g vercel' },
+      { label: 'Login',                cmd: 'vercel login' },
+      { label: 'Dev server',           cmd: 'vercel dev' },
+      { label: 'Pull env vars',        cmd: 'vercel env pull' },
+      { label: 'View logs',            cmd: 'vercel logs' },
+      { label: 'List deployments',     cmd: 'vercel ls' },
+    ]
+  },
+];
+
+// ===========================================================================
+// Remote tool definitions — Monica can update tools.json on GitHub to fix
+// commands for ALL users without shipping a new build.
+// ===========================================================================
+const REMOTE_TOOLS_URL = 'https://raw.githubusercontent.com/launchindustries/discovibe/main/tools.json';
+const REMOTE_TOOLS_KEY = 'discovibe.remote-tools.v1';
+
+function applyRemoteTools(data) {
+  if (!data || typeof data !== 'object') return;
+  // Patch INSTALL_TOOLS entries
+  if (data.tools && typeof data.tools === 'object') {
+    for (const [id, patch] of Object.entries(data.tools)) {
+      const t = INSTALL_TOOLS.find((x) => x.id === id);
+      if (t) Object.assign(t, patch);
+    }
+  }
+  // Patch AI_COMMAND_GROUPS entries
+  if (data.command_groups && typeof data.command_groups === 'object') {
+    for (const [id, patch] of Object.entries(data.command_groups)) {
+      const g = AI_COMMAND_GROUPS.find((x) => x.id === id);
+      if (g && patch.commands) g.commands = patch.commands;
+      if (g && patch.color) g.color = patch.color;
+    }
+  }
+}
+
+// Apply cached remote tools immediately (synchronous, before any UI renders)
+try {
+  const cached = localStorage.getItem(REMOTE_TOOLS_KEY);
+  if (cached) applyRemoteTools(JSON.parse(cached));
+} catch (_) {}
+
+// Fetch fresh remote tools in the background — update cache if version changed
+async function fetchRemoteTools() {
+  try {
+    const res = await fetch(REMOTE_TOOLS_URL, { cache: 'no-store' });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data || typeof data.version !== 'number') return;
+    const cached = localStorage.getItem(REMOTE_TOOLS_KEY);
+    const prev = cached ? JSON.parse(cached) : null;
+    if (!prev || data.version > prev.version) {
+      localStorage.setItem(REMOTE_TOOLS_KEY, JSON.stringify(data));
+      applyRemoteTools(data);
+      console.log('[DiscoVibe] Updated tool definitions to version', data.version);
+    }
+  } catch (_) {}   // network offline or file missing — use hardcoded defaults
+}
+
+// Track which AI sections the user has expanded so they stay open on re-render
+const cmdGroupOpen = {};
+
 function openCommands(anchor) {
   const c = document.createElement('div');
-  const title = document.createElement('div'); title.className = 'pop-title'; title.textContent = 'Quick commands (top 10)';
-  c.appendChild(title);
+  c.style.minWidth = '340px';
+
+  // ── My commands (top) ────────────────────────────────────────────────────
+  const myHdr = document.createElement('div'); myHdr.className = 'pop-title';
+  myHdr.textContent = 'My commands';
+  c.appendChild(myHdr);
 
   const addRow = document.createElement('div'); addRow.className = 'layout-save';
   const input = document.createElement('input'); input.type = 'text'; input.placeholder = 'e.g. cd ~/Developer'; input.spellcheck = false;
@@ -1204,33 +1528,74 @@ function openCommands(anchor) {
   const listEl = document.createElement('div'); listEl.className = 'layout-list';
   if (!list.length) {
     const empty = document.createElement('div'); empty.className = 'layout-empty';
-    empty.textContent = 'No saved commands. Add one above, then click to run it in the focused terminal.';
+    empty.textContent = 'No saved commands. Add one above.';
     listEl.appendChild(empty);
   } else {
     list.forEach((cmd, idx) => {
       const row = document.createElement('div'); row.className = 'layout-row';
       const run = document.createElement('button');
-      run.style.flex = '1 1 auto'; run.style.justifyContent = 'flex-start';
-      run.innerHTML = lic('terminal') + `<span style="font-family:ui-monospace,Menlo,monospace">${cmd.replace(/</g, '&lt;')}</span>`;
+      run.style.flex = '1 1 auto'; run.style.justifyContent = 'flex-start'; run.style.overflow = 'hidden';
+      run.innerHTML = lic('terminal') + `<span style="font-family:ui-monospace,Menlo,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${cmd.replace(/</g, '&lt;')}</span>`;
       run.title = 'Run in focused terminal';
       run.addEventListener('click', () => { runCommand(cmd); closePopover(); });
+      const up = document.createElement('button'); up.innerHTML = lic('chevron-up'); up.title = 'Move up'; up.disabled = idx === 0;
+      up.addEventListener('click', () => { const l = loadCommands(); l.splice(idx - 1, 0, l.splice(idx, 1)[0]); saveCommands(l); openCommands(anchor); });
+      const dn = document.createElement('button'); dn.innerHTML = lic('chevron-down'); dn.title = 'Move down'; dn.disabled = idx === list.length - 1;
+      dn.addEventListener('click', () => { const l = loadCommands(); l.splice(idx + 1, 0, l.splice(idx, 1)[0]); saveCommands(l); openCommands(anchor); });
       const del = document.createElement('button'); del.innerHTML = lic('trash-2'); del.title = 'Remove';
       del.addEventListener('click', () => { const l = loadCommands(); l.splice(idx, 1); saveCommands(l); openCommands(anchor); });
-      row.append(run, del);
+      row.append(run, up, dn, del);
       listEl.appendChild(row);
     });
   }
   c.appendChild(listEl);
 
-  // Recently closed terminals
+  // ── AI tool sections ─────────────────────────────────────────────────────
+  const aiHdr = document.createElement('div'); aiHdr.className = 'pop-title'; aiHdr.style.marginTop = '12px';
+  aiHdr.textContent = 'AI tools';
+  c.appendChild(aiHdr);
+
+  AI_COMMAND_GROUPS.forEach((group) => {
+    const isOpen = !!cmdGroupOpen[group.id];
+
+    const header = document.createElement('div'); header.className = 'cmd-group-hd';
+    if (isOpen) header.classList.add('open');
+    const dot = document.createElement('span'); dot.className = 'cmd-group-dot'; dot.style.background = group.color;
+    const nameEl = document.createElement('span'); nameEl.textContent = group.name; nameEl.style.flex = '1 1 auto';
+    const chev = document.createElement('i'); chev.setAttribute('data-lucide', 'chevron-right'); chev.className = 'cmd-chevron';
+    header.append(dot, nameEl, chev);
+
+    const body = document.createElement('div'); body.className = 'cmd-group-body';
+    body.style.display = isOpen ? 'flex' : 'none';   // use style.display, not hidden attr
+
+    group.commands.forEach(({ label, cmd }) => {
+      const row = document.createElement('button'); row.className = 'cmd-item'; row.title = cmd;
+      const lblEl = document.createElement('span'); lblEl.className = 'cmd-item-lbl'; lblEl.textContent = label;
+      const cmdEl = document.createElement('span'); cmdEl.className = 'cmd-item-cmd'; cmdEl.textContent = cmd;
+      row.append(lblEl, cmdEl);
+      row.addEventListener('click', () => { runCommand(cmd); closePopover(); });
+      body.appendChild(row);
+    });
+
+    header.addEventListener('click', () => {
+      const opening = body.style.display === 'none';
+      body.style.display = opening ? 'flex' : 'none';
+      cmdGroupOpen[group.id] = opening;
+      header.classList.toggle('open', opening);
+      renderIcons();
+    });
+
+    c.append(header, body);
+  });
+
+  // ── Recently closed ──────────────────────────────────────────────────────
   const closed = loadClosed();
   const rcTitle = document.createElement('div'); rcTitle.className = 'pop-title'; rcTitle.style.marginTop = '10px';
   rcTitle.textContent = 'Recently closed  ·  ⌘⇧T';
   c.appendChild(rcTitle);
   const rcList = document.createElement('div'); rcList.className = 'layout-list';
   if (!closed.length) {
-    const empty = document.createElement('div'); empty.className = 'layout-empty';
-    empty.textContent = 'Nothing closed yet.';
+    const empty = document.createElement('div'); empty.className = 'layout-empty'; empty.textContent = 'Nothing closed yet.';
     rcList.appendChild(empty);
   } else {
     closed.forEach((entry) => {
@@ -1259,7 +1624,8 @@ const LAYOUTS_KEY = 'tileterm.layouts.v1';
 
 function paneConfig(p, collapsed) {
   return { name: p.nameInput.value || p.name, color: p.color, bellOn: p.bellOn,
-    webUrl: p.webUrl || '', note: p.note || '', manual: !!p.manualName, collapsed: !!collapsed };
+    webUrl: p.webUrl || '', note: p.note || '', manual: !!p.manualName, collapsed: !!collapsed,
+    cwd: p.cwd || '' };
 }
 function serializePanes() {
   return [...panes.map((p) => paneConfig(p, false)), ...stored.map((p) => paneConfig(p, true))];
@@ -1320,6 +1686,8 @@ function restoreConfigs(list) {
   const first = panes[0];
   if (first) { setFocused(first.id); setTimeout(() => first.term.focus(), 40); }
   scheduleSave();
+  // After layout settles, show resume banners for any panes with saved AI sessions
+  setTimeout(() => panes.forEach(maybeShowResumeBanner), 300);
 }
 
 // ===========================================================================
@@ -1353,6 +1721,18 @@ window.api.onExit(({ id }) => {
   const pane = panes.find((p) => p.id === id) || stored.find((p) => p.id === id);
   if (!pane) return;
   pane.term.writeln('\r\n\x1b[90m[process exited — press any key to close]\x1b[0m');
+  // Save resume entry when an AI tool session ends
+  if (pane.detectedTool && pane.cwd) {
+    const resume = loadResume();
+    resume[pane.cwd] = {
+      tool: pane.detectedTool,
+      cmd: buildResumeCmd(pane.detectedTool, pane.cwd),
+      cwd: pane.cwd,
+      name: pane.nameInput ? (pane.nameInput.value || pane.name) : pane.name,
+      timestamp: Date.now(),
+    };
+    saveResume(resume);
+  }
   const off = pane.term.onData(() => { off.dispose(); if (pane.collapsed) closeStored(pane); else closePane(id); });
 });
 
@@ -1460,6 +1840,8 @@ themeBtn.addEventListener('click', () => applyThemeMode(themeMode === 'light' ? 
 muteBtn.addEventListener('click', () => setMute(!soundMuted));
 document.getElementById('btn-layouts').addEventListener('click', (e) => openLayouts(e.currentTarget));
 document.getElementById('btn-settings').addEventListener('click', (e) => openGlobalSettings(e.currentTarget));
+document.getElementById('btn-toolkit').addEventListener('click', () => openOnboarding());
+document.getElementById('btn-feedback').addEventListener('click', () => openFeedback());
 document.getElementById('btn-span').addEventListener('click', async () => { await window.api.spanDisplays(); updateDisplayReadout(); });
 
 function focusedPane() { return panes.find((p) => p.id === focusedId) || panes[0]; }
@@ -1526,6 +1908,10 @@ async function updateDisplayReadout() {
 window.api.onDisplays(() => updateDisplayReadout());
 window.addEventListener('resize', () => panes.forEach(fitPane));
 
+// Don't let a file dropped outside a terminal navigate the app to that file.
+window.addEventListener('dragover', (e) => { if (Array.from(e.dataTransfer?.types || []).includes('Files')) e.preventDefault(); });
+window.addEventListener('drop', (e) => { if (Array.from(e.dataTransfer?.types || []).includes('Files')) e.preventDefault(); });
+
 // Flush this window's session synchronously on quit so a crash/close loses nothing.
 window.addEventListener('beforeunload', () => {
   try { localStorage.setItem(SESSION_KEY, JSON.stringify({ panes: serializePanes() })); } catch (_) {}
@@ -1561,15 +1947,31 @@ setInterval(() => pollUsage(false), 5000);
 // ===========================================================================
 const ONBOARD_KEY = 'tileterm.onboarded.v1';
 const INSTALL_TOOLS = [
-  { id: 'brew', name: 'Homebrew', desc: 'Package manager (needed by most tools below)', check: 'command -v brew', cmd: '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"' },
-  { id: 'git', name: 'Git', desc: 'Version control', check: 'command -v git', cmd: 'brew install git' },
-  { id: 'node', name: 'Node.js', desc: 'JS runtime + npm (for many CLIs)', check: 'command -v node', cmd: 'brew install node' },
-  { id: 'claude', name: 'Claude Code', desc: "Anthropic's coding agent CLI", check: 'command -v claude', cmd: 'npm install -g @anthropic-ai/claude-code' },
-  { id: 'codex', name: 'Codex CLI', desc: "OpenAI's coding agent CLI", check: 'command -v codex', cmd: 'npm install -g @openai/codex' },
-  { id: 'gh', name: 'GitHub CLI', desc: 'gh — GitHub from the terminal', check: 'command -v gh', cmd: 'brew install gh' },
-  { id: 'rg', name: 'ripgrep', desc: 'Fast code search (rg)', check: 'command -v rg', cmd: 'brew install ripgrep' },
-  { id: 'python', name: 'Python 3', desc: 'Python runtime + pip', check: 'command -v python3', cmd: 'brew install python' },
-  { id: 'clt', name: 'Xcode Command Line Tools', desc: 'Compilers Homebrew depends on', check: 'xcode-select -p', cmd: 'xcode-select --install' }
+  // ── Core ──────────────────────────────────────────────────────────────────
+  { id: 'brew',     name: 'Homebrew',           desc: 'Package manager — install everything else',      check: 'command -v brew',       cmd: '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"' },
+  { id: 'clt',      name: 'Xcode CLI Tools',    desc: 'Compilers Homebrew needs',                       check: 'xcode-select -p',       cmd: 'xcode-select --install' },
+  { id: 'git',      name: 'Git',                desc: 'Version control',                                check: 'command -v git',         cmd: 'brew install git' },
+  { id: 'node',     name: 'Node.js',            desc: 'JS runtime + npm',                               check: 'command -v node',        cmd: 'brew install node' },
+  { id: 'fnm',      name: 'fnm',                desc: 'Fast Node version manager',                      check: 'command -v fnm',         cmd: 'brew install fnm' },
+  // ── AI coding agents ─────────────────────────────────────────────────────
+  { id: 'claude',   name: 'Claude Code',        desc: "Anthropic's coding agent CLI",                   check: 'command -v claude',      cmd: 'npm install -g @anthropic-ai/claude-code' },
+  { id: 'codex',    name: 'Codex CLI',          desc: "OpenAI's coding agent CLI",                      check: 'command -v codex',       cmd: 'npm install -g @openai/codex' },
+  { id: 'aider',    name: 'Aider',              desc: 'Open-source AI coding assistant',                check: 'command -v aider',       cmd: 'brew install aider' },
+  { id: 'gemini',   name: 'Gemini CLI',         desc: "Google's Gemini CLI",                            check: 'command -v gemini',      cmd: 'npm install -g @google/gemini-cli' },
+  { id: 'kiro',     name: 'Kiro CLI',           desc: "Amazon's Kiro agentic IDE CLI",                  check: 'command -v kiro-cli',    cmd: 'brew install --cask kiro-cli' },
+  // ── Package managers ─────────────────────────────────────────────────────
+  { id: 'pnpm',     name: 'pnpm',               desc: 'Fast, disk-efficient package manager',           check: 'command -v pnpm',        cmd: 'npm install -g pnpm' },
+  { id: 'bun',      name: 'Bun',                desc: 'Ultra-fast JS runtime & package manager',        check: 'command -v bun',         cmd: 'curl -fsSL https://bun.sh/install | bash' },
+  // ── Deploy / cloud ───────────────────────────────────────────────────────
+  { id: 'vercel',   name: 'Vercel CLI',         desc: 'Deploy to Vercel from the terminal',             check: 'command -v vercel',      cmd: 'npm install -g vercel' },
+  { id: 'supabase', name: 'Supabase CLI',       desc: 'Local Supabase dev + deployments',               check: 'command -v supabase',    cmd: 'brew install supabase/tap/supabase' },
+  { id: 'railway',  name: 'Railway CLI',        desc: 'Deploy to Railway from the terminal',            check: 'command -v railway',     cmd: 'npm install -g @railway/cli' },
+  { id: 'stripe',   name: 'Stripe CLI',         desc: 'Test Stripe webhooks locally',                   check: 'command -v stripe',      cmd: 'brew install stripe/stripe-cli/stripe' },
+  // ── Dev utilities ────────────────────────────────────────────────────────
+  { id: 'gh',       name: 'GitHub CLI',         desc: 'gh — GitHub from the terminal',                  check: 'command -v gh',          cmd: 'brew install gh' },
+  { id: 'rg',       name: 'ripgrep',            desc: 'Lightning-fast code search (rg)',                check: 'command -v rg',          cmd: 'brew install ripgrep' },
+  { id: 'jq',       name: 'jq',                 desc: 'JSON processor — great for API work',            check: 'command -v jq',          cmd: 'brew install jq' },
+  { id: 'python',   name: 'Python 3',           desc: 'Python runtime + pip',                           check: 'command -v python3',     cmd: 'brew install python' },
 ];
 
 function openOnboarding() {
@@ -1577,26 +1979,60 @@ function openOnboarding() {
   ov.innerHTML = `
     <div class="ob-card">
       <div class="ob-head"><i data-lucide="disc-3"></i> Welcome to DiscoVibe — set up your toolkit</div>
-      <div class="ob-sub">Pick the tools you want for vibe-coding. DiscoVibe will install them one at a time and prompt for the next.</div>
+      <div class="ob-sub">Pick your projects folder and the tools you want for vibe-coding.</div>
+      <div class="ob-folder">
+        <div class="ob-fold-label"><i data-lucide="folder-open"></i> Where are your projects?</div>
+        <div class="ob-fold-row">
+          <span class="ob-fold-path"></span>
+          <button class="ob-fold-btn pop-custom">Browse…</button>
+        </div>
+        <div class="ob-fold-note">New terminals open here automatically.</div>
+      </div>
       <div class="ob-list"></div>
-      <div class="ob-log" hidden></div>
+      <div class="ob-log" style="display:none"></div>
       <div class="ob-actions">
         <button class="ob-skip">Skip for now</button>
         <button class="ob-install pop-custom" style="flex:0 0 auto">Install selected</button>
       </div>
     </div>`;
   document.body.appendChild(ov);
+
+  // Project folder picker
+  const pathEl = ov.querySelector('.ob-fold-path');
+  pathEl.textContent = settings.projectsDir || '~ (home — click Browse to set a folder)';
+  ov.querySelector('.ob-fold-btn').addEventListener('click', async () => {
+    const r = await window.api.pickFolder();
+    if (r && r.ok) { settings.projectsDir = r.path; saveGlobals(); pathEl.textContent = r.path; }
+  });
+
   const list = ov.querySelector('.ob-list');
   const checks = {};
   INSTALL_TOOLS.forEach((t) => {
     const row = document.createElement('label'); row.className = 'ob-row';
-    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = (t.id === 'brew' || t.id === 'claude');
+    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = false;
     checks[t.id] = cb;
     const txt = document.createElement('div'); txt.className = 'ob-txt';
     txt.innerHTML = `<b>${t.name}</b><span>${t.desc}</span>`;
     const status = document.createElement('span'); status.className = 'ob-status'; status.dataset.id = t.id;
+    status.textContent = '…'; status.style.color = 'var(--readout)';
     row.append(cb, txt, status);
     list.appendChild(row);
+  });
+
+  // Run all checks in parallel — show installed / not-installed status and pre-check missing tools
+  INSTALL_TOOLS.forEach(async (t) => {
+    const statusEl = ov.querySelector(`.ob-status[data-id="${t.id}"]`);
+    const cb = checks[t.id];
+    try {
+      const r = await window.api.runUsage(t.check);
+      if (r && r.ok) {
+        statusEl.textContent = '✓ installed'; statusEl.style.color = '#7bd88f';
+        cb.checked = false;   // already there — don't reinstall by default
+      } else {
+        statusEl.textContent = 'not installed'; statusEl.style.color = 'var(--readout)';
+        cb.checked = true;    // missing — check it for installation
+      }
+    } catch (_) { statusEl.textContent = ''; cb.checked = false; }
   });
   const log = ov.querySelector('.ob-log');
   const finish = () => { localStorage.setItem(ONBOARD_KEY, '1'); ov.remove(); };
@@ -1606,16 +2042,30 @@ function openOnboarding() {
     const btn = e.currentTarget; btn.disabled = true;
     const chosen = INSTALL_TOOLS.filter((t) => checks[t.id].checked);
     if (!chosen.length) { finish(); return; }
-    log.hidden = false; log.textContent = '';
+    log.style.display = 'block'; log.textContent = '';
+    // Scroll the card so the log is visible
+    setTimeout(() => log.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 80);
+
     for (const t of chosen) {
       const status = ov.querySelector(`.ob-status[data-id="${t.id}"]`);
-      status.textContent = '⏳ installing…';
-      log.textContent += `\n$ ${t.cmd}\n`;
+      const cb = checks[t.id];
+      status.textContent = '⏳ installing…'; status.style.color = 'var(--readout)';
+      log.textContent += `\n── ${t.name} ──\n$ ${t.cmd}\n`;
+      log.scrollTop = log.scrollHeight;
       const r = await window.api.installTool(t.id, t.cmd);
-      status.textContent = r && r.ok ? '✓ done' : '✗ failed';
+      if (r && r.ok) {
+        status.textContent = '✓ Installed'; status.style.color = '#7bd88f';
+        // Uncheck and dim the row — it's done, no need to install again
+        cb.checked = false; cb.disabled = true;
+        const rowEl = cb.closest('label');
+        if (rowEl) { rowEl.style.opacity = '0.55'; rowEl.style.cursor = 'default'; rowEl.style.pointerEvents = 'none'; }
+      } else {
+        status.innerHTML = `<span style="color:#ff6b6b">✗ Failed</span> — <a class="prefs-link" href="#" data-url="https://www.google.com/search?q=${encodeURIComponent('install ' + t.name + ' mac')}">look up fix</a>`;
+        status.querySelector('a').addEventListener('click', (e) => { e.preventDefault(); window.api.openExternal(e.currentTarget.dataset.url); });
+      }
       log.scrollTop = log.scrollHeight;
     }
-    btn.textContent = 'Done'; btn.disabled = false;
+    btn.textContent = 'All done'; btn.disabled = false;
     btn.onclick = finish;
   });
 
@@ -1657,9 +2107,71 @@ function openOnboarding() {
   else addPane();
   updateDisplayReadout();
   pollUsage(true);
+  fetchRemoteTools();   // refresh tool/command definitions from GitHub in the background
 
   // First launch on the primary window → offer to install vibe-coding tools.
   if (ROLE === 'primary' && !localStorage.getItem(ONBOARD_KEY)) {
     setTimeout(openOnboarding, 500);
   }
+})();
+
+// ===========================================================================
+// Aurora / galaxy background — animated color blobs, mouse-responsive
+// ===========================================================================
+(function initAurora() {
+  const canvas = document.getElementById('aurora-canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  let W = 0, H = 0, mx = 0.5, my = 0.5;
+
+  function resize() { W = canvas.width = window.innerWidth; H = canvas.height = window.innerHeight; }
+  window.addEventListener('resize', resize); resize();
+  document.addEventListener('mousemove', (e) => {
+    // Smooth mouse tracking — lerp toward actual position for fluid drift
+    mx += (e.clientX / window.innerWidth  - mx) * 0.04;
+    my += (e.clientY / window.innerHeight - my) * 0.04;
+  });
+
+  // Each blob: normalized position (0–1), velocity, radius (fraction of max dim), aurora color
+  const blobs = [
+    { x: 0.15, y: 0.25, vx:  0.00014, vy:  0.00009, r: 0.52, cr: 110, cg: 20,  cb: 255 },  // violet
+    { x: 0.72, y: 0.18, vx: -0.00011, vy:  0.00016, r: 0.48, cr: 0,   cg: 190, cb: 255 },  // sky blue
+    { x: 0.45, y: 0.82, vx:  0.00016, vy: -0.00013, r: 0.55, cr: 0,   cg: 220, cb: 170 },  // aurora green
+    { x: 0.85, y: 0.55, vx: -0.00009, vy: -0.00011, r: 0.42, cr: 70,  cg: 0,   cb: 255 },  // deep indigo
+    { x: 0.30, y: 0.65, vx:  0.00010, vy:  0.00014, r: 0.46, cr: 0,   cg: 160, cb: 255 },  // ocean blue
+    { x: 0.60, y: 0.40, vx: -0.00013, vy:  0.00008, r: 0.40, cr: 180, cg: 0,   cb: 200 },  // magenta nebula
+  ];
+
+  let t = 0;
+
+  function draw() {
+    requestAnimationFrame(draw);
+    if (document.body.classList.contains('light')) { ctx.clearRect(0, 0, W, H); return; }
+    t += 0.0015;
+    ctx.clearRect(0, 0, W, H);
+    const maxDim = Math.max(W, H);
+
+    blobs.forEach((b, i) => {
+      // Drift + very gentle pull toward mouse position
+      b.x += b.vx + (mx - 0.5) * 0.000035;
+      b.y += b.vy + (my - 0.5) * 0.000035;
+      // Soft wrap-around
+      if (b.x < -0.4) b.x += 1.8; if (b.x > 1.4) b.x -= 1.8;
+      if (b.y < -0.4) b.y += 1.8; if (b.y > 1.4) b.y -= 1.8;
+
+      const px = b.x * W, py = b.y * H;
+      const radius = b.r * maxDim;
+      // Gently pulse opacity
+      const alpha = 0.055 + 0.025 * Math.sin(t * 0.8 + i * 1.1);
+
+      const g = ctx.createRadialGradient(px, py, 0, px, py, radius);
+      g.addColorStop(0,   `rgba(${b.cr},${b.cg},${b.cb},${(alpha * 1.6).toFixed(3)})`);
+      g.addColorStop(0.4, `rgba(${b.cr},${b.cg},${b.cb},${(alpha * 0.7).toFixed(3)})`);
+      g.addColorStop(1,   `rgba(${b.cr},${b.cg},${b.cb},0)`);
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W, H);
+    });
+  }
+
+  draw();
 })();

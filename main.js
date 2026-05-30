@@ -1,11 +1,12 @@
 'use strict';
 
-const { app, BrowserWindow, ipcMain, screen, Menu, session, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, screen, Menu, session, dialog, shell } = require('electron');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
 const { spawn } = require('child_process');
 const pty = require('node-pty');
+const { autoUpdater } = require('electron-updater');
 
 function loginShell() { return process.env.SHELL || '/bin/zsh'; }
 
@@ -251,6 +252,8 @@ function broadcastDisplays() {
 }
 
 // Relay a message to every window (used for global settings like title size).
+ipcMain.on('open-external', (_e, { url }) => { shell.openExternal(url).catch(() => {}); });
+
 ipcMain.on('broadcast', (event, payload) => {
   for (const w of windows) {
     if (!w.isDestroyed() && w.webContents.id !== event.sender.id) {
@@ -329,6 +332,29 @@ if (!gotSingleInstanceLock) {
   });
 }
 
+// ── Auto-updater ─────────────────────────────────────────────────────────────
+// Only runs in packaged builds (not dev mode).  Checks GitHub Releases for
+// a newer version and shows a native dialog prompting the user to update.
+autoUpdater.autoDownload = false;
+autoUpdater.on('update-available', (info) => {
+  const { response } = require('electron');
+  dialog.showMessageBox({
+    type: 'info', buttons: ['Download update', 'Later'],
+    title: 'DiscoVibe update available',
+    message: `Version ${info.version} is available.`,
+    detail: 'Click "Download update" to get it in the background. DiscoVibe will prompt you to restart when it\'s ready.'
+  }).then(({ response: r }) => {
+    if (r === 0) autoUpdater.downloadUpdate();
+  });
+});
+autoUpdater.on('update-downloaded', () => {
+  dialog.showMessageBox({
+    type: 'info', buttons: ['Restart now', 'Later'],
+    title: 'Update ready', message: 'Restart DiscoVibe to apply the update.'
+  }).then(({ response: r }) => { if (r === 0) autoUpdater.quitAndInstall(); });
+});
+autoUpdater.on('error', () => {});   // silent — don't interrupt the user
+
 app.whenReady().then(() => {
   if (!gotSingleInstanceLock) return;   // another instance owns the session; don't touch it
   // Allow microphone for voice mode (local, trusted app).
@@ -353,6 +379,8 @@ app.whenReady().then(() => {
   }
 
   app.on('before-quit', () => { isQuitting = true; });
+  // Check for updates 5 seconds after launch (only in packaged builds)
+  if (app.isPackaged) setTimeout(() => autoUpdater.checkForUpdates().catch(() => {}), 5000);
 
   screen.on('display-added', broadcastDisplays);
   screen.on('display-removed', broadcastDisplays);

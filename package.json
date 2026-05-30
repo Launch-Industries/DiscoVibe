@@ -1,7 +1,7 @@
 {
   "name": "discovibe",
   "productName": "DiscoVibe",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "DiscoVibe — a tiling multi-session terminal for macOS. Equidistant panes across every display, per-pane colors with always-legible text, tile themes, voice mode, quick commands, collapsible panes, saved layouts, and an attention bell that flashes + chimes when a tool is waiting on you.",
   "main": "main.js",
   "author": "Monica Colgan",
@@ -10,8 +10,9 @@
     "start": "electron .",
     "rebuild": "electron-rebuild -f -w node-pty",
     "postinstall": "electron-rebuild -f -w node-pty",
+    "pack": "electron-builder --dir",
     "dist": "electron-builder --mac",
-    "pack": "electron-builder --dir"
+    "release": "electron-builder --mac --publish=always"
   },
   "build": {
     "appId": "biz.launchindustries.discovibe",
@@ -22,38 +23,29 @@
       "renderer/**/*",
       "node_modules/**/*"
     ],
+    "publish": {
+      "provider": "github",
+      "owner": "launchindustries",
+      "repo": "discovibe"
+    },
     "mac": {
       "category": "public.app-category.developer-tools",
       "target": [
-        {
-          "target": "dmg",
-          "arch": [
-            "arm64"
-          ]
-        },
-        {
-          "target": "zip",
-          "arch": [
-            "arm64"
-          ]
-        }
+        { "target": "dmg", "arch": ["arm64"] },
+        { "target": "zip", "arch": ["arm64"] }
       ],
       "icon": "build/icon.icns",
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
-      "notarize": {
-        "teamId": "K2W6NQ6F66"
-      },
+      "notarize": { "teamId": "K2W6NQ6F66" },
       "extendInfo": {
         "NSMicrophoneUsageDescription": "DiscoVibe uses the microphone for voice mode, letting you speak commands into the focused terminal.",
         "NSSpeechRecognitionUsageDescription": "DiscoVibe uses speech recognition to turn your spoken words into terminal commands."
       }
     },
-    "dmg": {
-      "title": "DiscoVibe"
-    }
+    "dmg": { "title": "DiscoVibe" }
   },
   "devDependencies": {
     "@electron/rebuild": "^3.7.0",
@@ -64,6 +56,7 @@
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-web-links": "^0.11.0",
     "@xterm/xterm": "^5.5.0",
+    "electron-updater": "^6.8.3",
     "lucide": "^1.17.0",
     "node-pty": "^1.0.0"
   }

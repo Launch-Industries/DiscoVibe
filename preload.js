@@ -1,8 +1,11 @@
 'use strict';
 
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
+  // Resolve a dropped File to its absolute path (Electron 32+ removed File.path).
+  getPathForFile: (file) => { try { return webUtils.getPathForFile(file); } catch (_) { return (file && file.path) || ''; } },
+
   // PTY
   spawn: (opts) => ipcRenderer.invoke('pty-spawn', opts),
   input: (id, data) => ipcRenderer.send('pty-input', { id, data }),
@@ -30,6 +33,9 @@ contextBridge.exposeInMainWorld('api', {
   getDisplays: () => ipcRenderer.invoke('get-displays'),
   spanDisplays: () => ipcRenderer.invoke('span-displays'),
   onDisplays: (cb) => ipcRenderer.on('displays-changed', () => cb()),
+
+  // Open a URL in the default system browser
+  openExternal: (url) => ipcRenderer.send('open-external', { url }),
 
   // Cross-window broadcast (global settings)
   broadcast: (payload) => ipcRenderer.send('broadcast', payload),
