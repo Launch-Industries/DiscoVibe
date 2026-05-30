@@ -36,7 +36,11 @@ const settings = {
   projectsDir: '',           // new terminals open here (e.g. ~/Developer)
   openInApp: true,           // open clicked links in the pane's companion browser
   nameFromTitle: true,       // rename a pane when a program sets the terminal title (OSC)
-  showModel: true            // show the detected AI model (Opus/Sonnet/…) in the header
+  showModel: true,           // show the detected AI model (Opus/Sonnet/…) in the header
+  whiteActivePane: true,
+  globalColorMode: false,
+  globalActiveColor: '#ffffff',
+  globalInactiveColor: '#10131a'
 };
 
 // Optional AI clean-up of dictated speech (OpenAI-compatible endpoint, e.g. free Qwen on
@@ -236,6 +240,7 @@ const MAX_CHIMES = 6, CHIME_INTERVAL = 4000;
 function triggerAttention(pane) {
   if (!alertsEnabled || !pane.bellOn) return;
   pane.el.classList.add('attn');
+  window.api.bellRing();
   if (!pane.attnTimer) {
     pane.chimeCount = 0;
     const fire = () => {
@@ -412,16 +417,17 @@ function createPane(opts = {}) {
   term.open(termLayer);
 
   const pane = {
-    id, name, color, term, fitAddon,
+    id, name, color, tileColor: color, term, fitAddon,
     el: node, headerEl, bodyEl, termLayer, nameInput, colorInput, swatchBtn,
     webview, webUrlInput, webMode: false, webUrl: opts.webUrl || '',
     bellOn: opts.bellOn !== false,
-    note: opts.note || '', manualName: opts.manual !== undefined ? !!opts.manual : !!opts.name, noteBtn,
+    manualName: opts.manual !== undefined ? !!opts.manual : !!opts.name,
     collapsed: false, attnTimer: null, chimeCount: 0, lastActivity: Date.now()
   };
   panes.push(pane);
 
   applyColor(pane, color);
+  pane.tileColor = pane.color;
   applyTitleSizeToPane(pane, globalTitleSize);
   nameInput.classList.toggle('centered', globalTitleCenter);
   if (!pane.bellOn) { bellToggle.querySelector('i')?.setAttribute('data-lucide', 'bell-off'); bellToggle.classList.add('off'); renderIcons(); }
@@ -501,12 +507,13 @@ function createPane(opts = {}) {
   // Keyboard: Ctrl+Tab cycles; plain Tab cycles when the setting is on.
   term.attachCustomKeyEventHandler((e) => {
     if (e.type !== 'keydown' || e.key !== 'Tab') return true;
-    const plain = !e.ctrlKey && !e.altKey && !e.metaKey;
-    if (e.ctrlKey || (settings.tabSwitch && plain)) { cyclePane(e.shiftKey ? -1 : 1); return false; }
+    if (e.ctrlKey && !e.altKey && !e.metaKey) { cyclePane(e.shiftKey ? -1 : 1); return false; }
+    const plainForward = !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey;
+    if (settings.tabSwitch && plainForward) { cyclePane(1); return false; }
     return true;
   });
 
-  const acknowledge = () => { setFocused(id); clearAttention(pane); pane.lastActivity = Date.now(); };
+  const acknowledge = () => { ensureAudio(); setFocused(id); clearAttention(pane); pane.lastActivity = Date.now(); };
   node.addEventListener('mousedown', acknowledge);
   if (term.textarea) term.textarea.addEventListener('focus', acknowledge);
 
@@ -524,13 +531,9 @@ function createPane(opts = {}) {
   offerEl.insertAdjacentElement('afterend', modelBadge);
   pane.modelBadge = modelBadge;
 
-  // Per-window note ("what I'm working on") — saved with the session
-  noteBtn.classList.toggle('has-note', !!pane.note);
-  noteBtn.addEventListener('click', () => openNotePopover(pane, noteBtn));
-
   // Color: chip opens preset popover; hidden input is the custom picker
   swatchBtn.addEventListener('click', () => openColorPopover(pane, swatchBtn));
-  colorInput.addEventListener('input', () => { applyColor(pane, colorInput.value); scheduleSave(); });
+  colorInput.addEventListener('input', () => { applyColor(pane, colorInput.value); pane.tileColor = pane.color; scheduleSave(); });
 
   // Bell toggle
   bellToggle.addEventListener('click', () => {
@@ -543,6 +546,13 @@ function createPane(opts = {}) {
 
   collapseBtn.addEventListener('click', () => collapsePane(pane));
   closeBtn.addEventListener('click', () => closePane(id));
+  fileInsertBtn.addEventListener('click', async () => {
+    const r = await window.api.pickFileForTerminal();
+    if (r && r.ok && r.paths.length) { window.api.input(id, r.paths.join(' ')); term.focus(); }
+  });
+  memoryBtn.addEventListener('click', () => { window.api.input(id, '/memory\r'); term.focus(); });
+  clearBtn.addEventListener('click', () => { window.api.input(id, '/clear\r'); term.focus(); });
+  compactBtn.addEventListener('click', () => { window.api.input(id, '/compact\r'); term.focus(); });
 
   // Drag to reorder (via grip)
   grip.addEventListener('dragstart', (e) => {
@@ -565,6 +575,22 @@ function createPane(opts = {}) {
     const [moved] = panes.splice(from, 1);
     panes.splice(to, 0, moved);
     relayout(); scheduleSave();
+  });
+
+  node.addEventListener('dragover', (e) => {
+    if (dragSrcId) return;
+    if (e.dataTransfer.types.includes('Files')) {
+      e.preventDefault(); e.dataTransfer.dropEffect = 'copy';
+      node.classList.add('file-drop-target');
+    }
+  });
+  node.addEventListener('dragleave', () => node.classList.remove('file-drop-target'));
+  node.addEventListener('drop', async (e) => {
+    node.classList.remove('file-drop-target');
+    if (dragSrcId || !e.dataTransfer.files.length) return;
+    e.preventDefault();
+    const paths = Array.from(e.dataTransfer.files).map((f) => f.path);
+    if (paths.length) { window.api.input(id, paths.join(' ')); term.focus(); }
   });
 
   // Refit on size changes
@@ -641,9 +667,29 @@ function closePane(id, skipRecord) {
   scheduleSave();
 }
 
+function refreshPaneColor(p) {
+  const isFocused = p.id === focusedId;
+  let displayColor;
+  if (settings.globalColorMode) {
+    displayColor = isFocused ? settings.globalActiveColor : settings.globalInactiveColor;
+  } else if (settings.whiteActivePane && isFocused) {
+    displayColor = '#ffffff';
+  } else {
+    displayColor = p.tileColor;
+  }
+  applyColor(p, displayColor);
+  if (displayColor !== p.tileColor) {
+    p.colorInput.value = p.tileColor;
+    p.swatchBtn.style.setProperty('--swatch-fill', p.tileColor);
+    p.swatchBtn.style.setProperty('--swatch-ring', readableFg(p.tileColor));
+  }
+}
 function setFocused(id) {
   focusedId = id;
-  for (const p of panes) p.el.classList.toggle('focused', p.id === id);
+  for (const p of panes) {
+    p.el.classList.toggle('focused', p.id === id);
+    refreshPaneColor(p);
+  }
 }
 function cyclePane(dir) {
   if (panes.length < 2) return;
@@ -803,23 +849,6 @@ function textRow(label, get, set, placeholder, type, withPick) {
 }
 function settingsChanged() { applySettings(); saveGlobals(); window.api.broadcast({ type: 'settings', value: { ...settings } }); }
 
-function openNotePopover(pane, anchor) {
-  const c = document.createElement('div');
-  const title = document.createElement('div'); title.className = 'pop-title'; title.textContent = 'What are you working on?';
-  c.appendChild(title);
-  const ta = document.createElement('textarea');
-  ta.value = pane.note || '';
-  ta.placeholder = 'e.g. Fixing the checkout bug on the storefront repo…';
-  ta.rows = 4;
-  ta.style.cssText = 'width:240px;max-width:70vw;resize:vertical;background:var(--btn-bg);color:inherit;border:1px solid var(--pop-line);border-radius:8px;padding:8px;font:inherit;font-size:13px';
-  ta.addEventListener('input', () => { pane.note = ta.value; pane.noteBtn.classList.toggle('has-note', !!pane.note.trim()); scheduleSave(); });
-  c.appendChild(ta);
-  const note = document.createElement('div'); note.className = 'layout-empty';
-  note.textContent = 'Saved with this window and restored when DiscoVibe reopens.';
-  c.appendChild(note);
-  openPopover(anchor, c);
-  setTimeout(() => ta.focus(), 30);
-}
 
 // AI naming: derive a short label from a pane's recent activity (opt-in, needs the AI key).
 async function aiSuggestName(pane) {
@@ -918,9 +947,9 @@ function openColorPopover(pane, anchor) {
   PRESET_COLORS.forEach((col) => {
     const sw = document.createElement('div'); sw.className = 'preset';
     sw.style.background = col;
-    if (toHex6(col) === toHex6(pane.color)) sw.classList.add('current');
+    if (toHex6(col) === toHex6(pane.tileColor)) sw.classList.add('current');
     sw.title = col;
-    sw.addEventListener('click', () => { applyColor(pane, col); scheduleSave(); closePopover(); });
+    sw.addEventListener('click', () => { applyColor(pane, col); pane.tileColor = pane.color; scheduleSave(); closePopover(); });
     grid.appendChild(sw);
   });
   c.appendChild(grid);
@@ -949,6 +978,8 @@ function openGlobalSettings(anchor) {
     () => { settings.dimLevel = Math.min(0.9, +(settings.dimLevel + 0.1).toFixed(2)); settingsChanged(); },
     () => { settings.dimLevel = Math.max(0.1, +(settings.dimLevel - 0.1).toFixed(2)); settingsChanged(); }));
   c.appendChild(checkRow('Disco mode ✨', () => settings.disco, (v) => { settings.disco = v; settingsChanged(); }));
+  c.appendChild(checkRow('White active pane', () => settings.whiteActivePane, (v) => { settings.whiteActivePane = v; settingsChanged(); for (const p of panes) refreshPaneColor(p); }));
+  c.appendChild(checkRow('Global color mode', () => settings.globalColorMode, (v) => { settings.globalColorMode = v; settingsChanged(); for (const p of panes) refreshPaneColor(p); }));
 
   const more = document.createElement('button'); more.className = 'pop-custom'; more.style.marginTop = '10px';
   more.innerHTML = lic('sliders-horizontal') + '<span>All preferences  (⌘,)</span>';
@@ -1092,7 +1123,9 @@ function setTileTheme(name, fromRemote) {
 function reskinAll(name) {
   const pal = TILE_THEMES[name];
   if (!pal) return;
-  [...panes, ...stored].forEach((p, idx) => applyColor(p, pal[idx % pal.length]));
+  [...panes, ...stored].forEach((p, idx) => { p.tileColor = pal[idx % pal.length]; });
+  for (const p of panes) refreshPaneColor(p);
+  for (const p of stored) applyColor(p, p.tileColor);
   renderTray();
   scheduleSave();
 }
@@ -1266,8 +1299,8 @@ const SESSION_KEY = 'tileterm.session.v1:' + WIN_KEY;   // per-window so every m
 const LAYOUTS_KEY = 'tileterm.layouts.v1';
 
 function paneConfig(p, collapsed) {
-  return { name: p.nameInput.value || p.name, color: p.color, bellOn: p.bellOn,
-    webUrl: p.webUrl || '', note: p.note || '', manual: !!p.manualName, collapsed: !!collapsed };
+  return { name: p.nameInput.value || p.name, color: p.tileColor, bellOn: p.bellOn,
+    webUrl: p.webUrl || '', manual: !!p.manualName, collapsed: !!collapsed };
 }
 function serializePanes() {
   return [...panes.map((p) => paneConfig(p, false)), ...stored.map((p) => paneConfig(p, true))];

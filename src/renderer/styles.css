@@ -233,6 +233,8 @@ body.dim-inactive .pane:not(.focused) .pane-body { filter: brightness(var(--dim-
 .pane.focused { box-shadow: 0 0 0 1px var(--accent), 0 6px 20px rgba(0,0,0,.45); }
 .pane.dragging { opacity: .45; }
 .pane.drop-target { outline: 3px dashed var(--accent); outline-offset: -3px; }
+.pane.file-drop-target { outline: 2px solid rgba(255,255,255,0.7); outline-offset: -2px; }
+.pane.file-drop-target .pane-header { opacity: 0.85; }
 
 .pane-header {
   flex: 0 0 auto;
@@ -282,12 +284,6 @@ body.dim-inactive .pane:not(.focused) .pane-body { filter: brightness(var(--dim-
 .pane-btn:hover { background: rgba(127,127,127,.34); }
 .pane-btn svg.lucide { width: 15px; height: 15px; stroke-width: 2.25; }
 .bell-toggle.off { opacity: .45; }
-.note-btn { position: relative; }
-.note-btn.has-note::after {
-  content: ""; position: absolute; top: 2px; right: 2px;
-  width: 6px; height: 6px; border-radius: 50%; background: #FFD100;
-  box-shadow: 0 0 0 1px rgba(0,0,0,.4);
-}
 
 /* Color chip — always has a visible, contrasting border */
 .swatch-btn {
