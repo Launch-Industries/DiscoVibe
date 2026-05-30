@@ -236,9 +236,16 @@ body.dim-inactive .pane:not(.focused) .pane-body { filter: brightness(var(--dim-
 
 .pane-header {
   flex: 0 0 auto;
-  display: flex; align-items: center; gap: 6px;
-  padding: 4px 8px;
+  display: flex; flex-direction: column;
+  padding: 4px 8px 3px;
   font-weight: 700;
+}
+.pane-title-row {
+  display: flex; align-items: center; gap: 6px;
+}
+.pane-btn-row {
+  display: flex; align-items: center; gap: 4px;
+  padding-top: 2px;
 }
 .grip { cursor: grab; opacity: .55; display: inline-flex; }
 .grip:active { cursor: grabbing; }

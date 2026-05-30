@@ -38,19 +38,23 @@
   <template id="pane-template">
     <div class="pane">
       <div class="pane-header">
-        <span class="grip" draggable="true" title="Drag to reorder"><i data-lucide="grip-vertical"></i></span>
-        <input class="pane-name" type="text" spellcheck="false" />
-        <span class="pane-spacer"></span>
-        <button class="pane-btn swatch-btn" title="Background color"></button>
-        <button class="pane-btn file-insert-btn" title="Insert file path(s) at cursor"><i data-lucide="file-plus"></i></button>
-        <button class="pane-btn memory-btn" title="Save project to memory (/memory)"><i data-lucide="brain"></i></button>
-        <button class="pane-btn clear-btn" title="Clear context (/clear)"><i data-lucide="eraser"></i></button>
-        <button class="pane-btn compact-btn" title="Compact conversation (/compact)"><i data-lucide="minimize"></i></button>
-        <button class="pane-btn view-toggle" title="Toggle terminal / companion browser"><i data-lucide="globe"></i></button>
-        <button class="pane-btn bell-toggle" title="Toggle bell for this pane"><i data-lucide="bell"></i></button>
-        <button class="pane-btn collapse-btn" title="Collapse / store this terminal (keeps it running)"><i data-lucide="minimize-2"></i></button>
-        <button class="pane-btn close-btn" title="Close this terminal"><i data-lucide="x"></i></button>
-        <input class="color-input" type="color" hidden />
+        <div class="pane-title-row">
+          <span class="grip" draggable="true" title="Drag to reorder"><i data-lucide="grip-vertical"></i></span>
+          <input class="pane-name" type="text" spellcheck="false" />
+          <span class="pane-spacer"></span>
+          <input class="color-input" type="color" hidden />
+        </div>
+        <div class="pane-btn-row">
+          <button class="pane-btn swatch-btn" title="Background color"></button>
+          <button class="pane-btn file-insert-btn" title="Insert file path(s) at cursor"><i data-lucide="file-plus"></i></button>
+          <button class="pane-btn memory-btn" title="Save project to memory (/memory)"><i data-lucide="brain"></i></button>
+          <button class="pane-btn clear-btn" title="Clear context (/clear)"><i data-lucide="eraser"></i></button>
+          <button class="pane-btn compact-btn" title="Compact conversation (/compact)"><i data-lucide="minimize"></i></button>
+          <button class="pane-btn view-toggle" title="Toggle terminal / companion browser"><i data-lucide="globe"></i></button>
+          <button class="pane-btn bell-toggle" title="Toggle bell for this pane"><i data-lucide="bell"></i></button>
+          <button class="pane-btn collapse-btn" title="Collapse / store this terminal (keeps it running)"><i data-lucide="minimize-2"></i></button>
+          <button class="pane-btn close-btn" title="Close this terminal"><i data-lucide="x"></i></button>
+        </div>
       </div>
       <div class="pane-body">
         <div class="term-layer"></div>
