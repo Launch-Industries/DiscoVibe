@@ -3,3 +3,4 @@ dist/
 *.log
 .DS_Store
 renderer/secrets.local.js
+license-signing-key.private.pem
