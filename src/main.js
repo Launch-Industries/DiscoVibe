@@ -108,7 +108,7 @@ ipcMain.handle('pty-spawn', (event, opts = {}) => {
       cols,
       rows,
       cwd: dir,
-      env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' }
+      env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'xterm-256color', TERM_PROGRAM_VERSION: '' }
     });
   } catch (err) {
     return { ok: false, error: String(err && err.message ? err.message : err) };
