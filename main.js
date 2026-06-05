@@ -184,16 +184,6 @@ ipcMain.handle('run-usage', (_e, { command }) => new Promise((resolve) => {
   p.on('error', (e2) => resolve({ ok: false, err: String(e2.message) }));
 }));
 
-// Install a tool from the first-launch wizard, streaming output back to the renderer.
-ipcMain.handle('install-tool', (event, { id, command }) => new Promise((resolve) => {
-  const p = spawn(loginShell(), ['-lc', command]);
-  const send = (chunk) => { if (!event.sender.isDestroyed()) event.sender.send('install-output', { id, chunk }); };
-  p.stdout.on('data', (d) => send(d.toString()));
-  p.stderr.on('data', (d) => send(d.toString()));
-  p.on('close', (code) => resolve({ ok: code === 0, code }));
-  p.on('error', (err) => { send('\n' + String(err.message) + '\n'); resolve({ ok: false, error: String(err.message) }); });
-}));
-
 // Pick a local file to preview in a pane's companion browser.
 ipcMain.handle('pick-file', async (event) => {
   const win = BrowserWindow.fromWebContents(event.sender);

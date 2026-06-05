@@ -24,10 +24,8 @@ contextBridge.exposeInMainWorld('api', {
   pickFile: () => ipcRenderer.invoke('pick-file'),
   pickFolder: () => ipcRenderer.invoke('pick-folder'),
 
-  // Usage bar + first-launch installer
+  // Usage bar + toolkit install detection
   runUsage: (command) => ipcRenderer.invoke('run-usage', { command }),
-  installTool: (id, command) => ipcRenderer.invoke('install-tool', { id, command }),
-  onInstallOutput: (cb) => ipcRenderer.on('install-output', (_e, payload) => cb(payload)),
 
   // Displays / multi-window
   getDisplays: () => ipcRenderer.invoke('get-displays'),

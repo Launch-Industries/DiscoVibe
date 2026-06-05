@@ -248,13 +248,22 @@ body.dim-inactive .pane:not(.focused) .pane-body { filter: brightness(var(--dim-
 .ob-fold-row { display: flex; align-items: center; gap: 8px; }
 .ob-fold-path { flex: 1 1 auto; font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: var(--readout); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ob-fold-note { font-size: 12px; color: var(--readout); margin-top: 6px; }
+.ob-startnote { display: flex; align-items: flex-start; gap: 8px; margin: 0 0 12px; padding: 10px 12px; background: var(--btn-bg); border: 1px solid var(--pop-line); border-radius: 10px; font-size: 12px; color: var(--readout); line-height: 1.45; }
+.ob-startnote svg.lucide { width: 15px; height: 15px; flex: 0 0 auto; margin-top: 1px; color: #b86bd8; }
+.ob-startnote b { color: var(--chrome-fg); }
 .ob-list { display: flex; flex-direction: column; gap: 4px; }
-.ob-row { display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 10px; cursor: pointer; }
+.ob-row { display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 10px; }
 .ob-row:hover { background: var(--btn-bg-hover); }
 .ob-txt { flex: 1 1 auto; display: flex; flex-direction: column; }
 .ob-txt b { font-size: 14px; }
 .ob-txt span { font-size: 12px; color: var(--readout); }
-.ob-status { font-size: 12px; font-weight: 700; min-width: 90px; text-align: right; }
+.ob-status { font-size: 12px; font-weight: 700; min-width: 84px; text-align: left; }
+.ob-row-actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.ob-act { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; padding: 5px 10px; border-radius: 8px; border: 1px solid var(--pop-line); background: var(--btn-bg); color: var(--chrome-fg); cursor: pointer; }
+.ob-act:hover { background: var(--btn-bg-hover); }
+.ob-act svg.lucide { width: 13px; height: 13px; }
+.ob-act-ghost { background: transparent; color: var(--readout); }
+.ob-act-ghost:hover { color: var(--chrome-fg); background: var(--btn-bg); }
 .ob-log {
   margin-top: 12px; height: 280px; overflow-y: scroll; white-space: pre-wrap; word-break: break-all;
   background: #02030a; color: #b8f0c0; border: 1.5px solid rgba(0,220,130,0.25); border-radius: 10px;

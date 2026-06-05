@@ -1452,7 +1452,7 @@ const AI_COMMAND_GROUPS = [
 // Remote tool definitions — Monica can update tools.json on GitHub to fix
 // commands for ALL users without shipping a new build.
 // ===========================================================================
-const REMOTE_TOOLS_URL = 'https://raw.githubusercontent.com/launchindustries/discovibe/main/tools.json';
+const REMOTE_TOOLS_URL = 'https://raw.githubusercontent.com/Launch-Industries/DiscoVibe/main/tools.json';
 const REMOTE_TOOLS_KEY = 'discovibe.remote-tools.v1';
 
 function applyRemoteTools(data) {
@@ -1947,31 +1947,35 @@ setInterval(() => pollUsage(false), 5000);
 // ===========================================================================
 const ONBOARD_KEY = 'tileterm.onboarded.v1';
 const INSTALL_TOOLS = [
+  // Each tool: a detection probe (check), the suggested install command (cmd), and the
+  // official install/docs page (url). The toolkit shows status and lets you run the
+  // command in your real terminal or open the guide — it does NOT auto-run installers
+  // (those need an interactive shell / sudo / a TTY, which a background process can't give).
   // ── Core ──────────────────────────────────────────────────────────────────
-  { id: 'brew',     name: 'Homebrew',           desc: 'Package manager — install everything else',      check: 'command -v brew',       cmd: '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"' },
-  { id: 'clt',      name: 'Xcode CLI Tools',    desc: 'Compilers Homebrew needs',                       check: 'xcode-select -p',       cmd: 'xcode-select --install' },
-  { id: 'git',      name: 'Git',                desc: 'Version control',                                check: 'command -v git',         cmd: 'brew install git' },
-  { id: 'node',     name: 'Node.js',            desc: 'JS runtime + npm',                               check: 'command -v node',        cmd: 'brew install node' },
-  { id: 'fnm',      name: 'fnm',                desc: 'Fast Node version manager',                      check: 'command -v fnm',         cmd: 'brew install fnm' },
+  { id: 'brew',     name: 'Homebrew',           desc: 'Package manager — install everything else',      check: 'command -v brew',       cmd: '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"', url: 'https://brew.sh' },
+  { id: 'clt',      name: 'Xcode CLI Tools',    desc: 'Compilers Homebrew needs',                       check: 'xcode-select -p',       cmd: 'xcode-select --install', url: 'https://mac.install.guide/commandlinetools/' },
+  { id: 'git',      name: 'Git',                desc: 'Version control',                                check: 'command -v git',         cmd: 'brew install git', url: 'https://git-scm.com/download/mac' },
+  { id: 'node',     name: 'Node.js',            desc: 'JS runtime + npm',                               check: 'command -v node',        cmd: 'brew install node', url: 'https://nodejs.org/en/download' },
+  { id: 'fnm',      name: 'fnm',                desc: 'Fast Node version manager',                      check: 'command -v fnm',         cmd: 'brew install fnm', url: 'https://github.com/Schniz/fnm#installation' },
   // ── AI coding agents ─────────────────────────────────────────────────────
-  { id: 'claude',   name: 'Claude Code',        desc: "Anthropic's coding agent CLI",                   check: 'command -v claude',      cmd: 'npm install -g @anthropic-ai/claude-code' },
-  { id: 'codex',    name: 'Codex CLI',          desc: "OpenAI's coding agent CLI",                      check: 'command -v codex',       cmd: 'npm install -g @openai/codex' },
-  { id: 'aider',    name: 'Aider',              desc: 'Open-source AI coding assistant',                check: 'command -v aider',       cmd: 'brew install aider' },
-  { id: 'gemini',   name: 'Gemini CLI',         desc: "Google's Gemini CLI",                            check: 'command -v gemini',      cmd: 'npm install -g @google/gemini-cli' },
-  { id: 'kiro',     name: 'Kiro CLI',           desc: "Amazon's Kiro agentic IDE CLI",                  check: 'command -v kiro-cli',    cmd: 'brew install --cask kiro-cli' },
+  { id: 'claude',   name: 'Claude Code',        desc: "Anthropic's coding agent CLI",                   check: 'command -v claude',      cmd: 'npm install -g @anthropic-ai/claude-code', url: 'https://docs.anthropic.com/en/docs/claude-code/setup' },
+  { id: 'codex',    name: 'Codex CLI',          desc: "OpenAI's coding agent CLI",                      check: 'command -v codex',       cmd: 'npm install -g @openai/codex', url: 'https://github.com/openai/codex' },
+  { id: 'aider',    name: 'Aider',              desc: 'Open-source AI coding assistant',                check: 'command -v aider',       cmd: 'brew install aider', url: 'https://aider.chat/docs/install.html' },
+  { id: 'gemini',   name: 'Gemini CLI',         desc: "Google's Gemini CLI",                            check: 'command -v gemini',      cmd: 'npm install -g @google/gemini-cli', url: 'https://github.com/google-gemini/gemini-cli' },
+  { id: 'kiro',     name: 'Kiro CLI',           desc: "Amazon's Kiro agentic IDE CLI",                  check: 'command -v kiro-cli',    cmd: 'brew install --cask kiro-cli', url: 'https://kiro.dev' },
   // ── Package managers ─────────────────────────────────────────────────────
-  { id: 'pnpm',     name: 'pnpm',               desc: 'Fast, disk-efficient package manager',           check: 'command -v pnpm',        cmd: 'npm install -g pnpm' },
-  { id: 'bun',      name: 'Bun',                desc: 'Ultra-fast JS runtime & package manager',        check: 'command -v bun',         cmd: 'curl -fsSL https://bun.sh/install | bash' },
+  { id: 'pnpm',     name: 'pnpm',               desc: 'Fast, disk-efficient package manager',           check: 'command -v pnpm',        cmd: 'npm install -g pnpm', url: 'https://pnpm.io/installation' },
+  { id: 'bun',      name: 'Bun',                desc: 'Ultra-fast JS runtime & package manager',        check: 'command -v bun',         cmd: 'curl -fsSL https://bun.sh/install | bash', url: 'https://bun.sh/docs/installation' },
   // ── Deploy / cloud ───────────────────────────────────────────────────────
-  { id: 'vercel',   name: 'Vercel CLI',         desc: 'Deploy to Vercel from the terminal',             check: 'command -v vercel',      cmd: 'npm install -g vercel' },
-  { id: 'supabase', name: 'Supabase CLI',       desc: 'Local Supabase dev + deployments',               check: 'command -v supabase',    cmd: 'brew install supabase/tap/supabase' },
-  { id: 'railway',  name: 'Railway CLI',        desc: 'Deploy to Railway from the terminal',            check: 'command -v railway',     cmd: 'npm install -g @railway/cli' },
-  { id: 'stripe',   name: 'Stripe CLI',         desc: 'Test Stripe webhooks locally',                   check: 'command -v stripe',      cmd: 'brew install stripe/stripe-cli/stripe' },
+  { id: 'vercel',   name: 'Vercel CLI',         desc: 'Deploy to Vercel from the terminal',             check: 'command -v vercel',      cmd: 'npm install -g vercel', url: 'https://vercel.com/docs/cli' },
+  { id: 'supabase', name: 'Supabase CLI',       desc: 'Local Supabase dev + deployments',               check: 'command -v supabase',    cmd: 'brew install supabase/tap/supabase', url: 'https://supabase.com/docs/guides/local-development/cli/getting-started' },
+  { id: 'railway',  name: 'Railway CLI',        desc: 'Deploy to Railway from the terminal',            check: 'command -v railway',     cmd: 'npm install -g @railway/cli', url: 'https://docs.railway.com/guides/cli' },
+  { id: 'stripe',   name: 'Stripe CLI',         desc: 'Test Stripe webhooks locally',                   check: 'command -v stripe',      cmd: 'brew install stripe/stripe-cli/stripe', url: 'https://docs.stripe.com/stripe-cli' },
   // ── Dev utilities ────────────────────────────────────────────────────────
-  { id: 'gh',       name: 'GitHub CLI',         desc: 'gh — GitHub from the terminal',                  check: 'command -v gh',          cmd: 'brew install gh' },
-  { id: 'rg',       name: 'ripgrep',            desc: 'Lightning-fast code search (rg)',                check: 'command -v rg',          cmd: 'brew install ripgrep' },
-  { id: 'jq',       name: 'jq',                 desc: 'JSON processor — great for API work',            check: 'command -v jq',          cmd: 'brew install jq' },
-  { id: 'python',   name: 'Python 3',           desc: 'Python runtime + pip',                           check: 'command -v python3',     cmd: 'brew install python' },
+  { id: 'gh',       name: 'GitHub CLI',         desc: 'gh — GitHub from the terminal',                  check: 'command -v gh',          cmd: 'brew install gh', url: 'https://cli.github.com/' },
+  { id: 'rg',       name: 'ripgrep',            desc: 'Lightning-fast code search (rg)',                check: 'command -v rg',          cmd: 'brew install ripgrep', url: 'https://github.com/BurntSushi/ripgrep#installation' },
+  { id: 'jq',       name: 'jq',                 desc: 'JSON processor — great for API work',            check: 'command -v jq',          cmd: 'brew install jq', url: 'https://jqlang.github.io/jq/download/' },
+  { id: 'python',   name: 'Python 3',           desc: 'Python runtime + pip',                           check: 'command -v python3',     cmd: 'brew install python', url: 'https://www.python.org/downloads/macos/' },
 ];
 
 function openOnboarding() {
@@ -1979,7 +1983,7 @@ function openOnboarding() {
   ov.innerHTML = `
     <div class="ob-card">
       <div class="ob-head"><i data-lucide="disc-3"></i> Welcome to DiscoVibe — set up your toolkit</div>
-      <div class="ob-sub">Pick your projects folder and the tools you want for vibe-coding.</div>
+      <div class="ob-sub">Pick your projects folder, then set up the tools you want for vibe-coding. Each row shows whether it's already installed — hit <b>Run</b> to drop the install command into your terminal, or open the official <b>Guide</b>.</div>
       <div class="ob-folder">
         <div class="ob-fold-label"><i data-lucide="folder-open"></i> Where are your projects?</div>
         <div class="ob-fold-row">
@@ -1988,11 +1992,11 @@ function openOnboarding() {
         </div>
         <div class="ob-fold-note">New terminals open here automatically.</div>
       </div>
+      <div class="ob-startnote"><i data-lucide="info"></i> New Mac? Install <b>Xcode Command Line Tools</b> and <b>Homebrew</b> first — Git, Node and most others install through Homebrew (npm tools need Node).</div>
       <div class="ob-list"></div>
-      <div class="ob-log" style="display:none"></div>
       <div class="ob-actions">
-        <button class="ob-skip">Skip for now</button>
-        <button class="ob-install pop-custom" style="flex:0 0 auto">Install selected</button>
+        <button class="ob-skip">Close</button>
+        <button class="ob-done pop-custom" style="flex:0 0 auto">Done</button>
       </div>
     </div>`;
   document.body.appendChild(ov);
@@ -2005,71 +2009,49 @@ function openOnboarding() {
     if (r && r.ok) { settings.projectsDir = r.path; saveGlobals(); pathEl.textContent = r.path; }
   });
 
+  const finish = () => { localStorage.setItem(ONBOARD_KEY, '1'); ov.remove(); };
+  ov.querySelector('.ob-skip').addEventListener('click', finish);
+  ov.querySelector('.ob-done').addEventListener('click', finish);
+
+  // Drop a command into the focused terminal (real interactive shell — sudo/TTY work
+  // there, unlike a background process), copy it as a fallback, and close so it's visible.
+  const runInTerminal = (cmd) => {
+    const pane = panes.find((p) => p.id === focusedId) || panes[0];
+    if (pane) { window.api.input(pane.id, cmd + '\n'); pane.term.focus(); }
+    try { navigator.clipboard.writeText(cmd); } catch (_) {}
+    pushClip(cmd);
+    finish();
+  };
+
   const list = ov.querySelector('.ob-list');
-  const checks = {};
   INSTALL_TOOLS.forEach((t) => {
-    const row = document.createElement('label'); row.className = 'ob-row';
-    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = false;
-    checks[t.id] = cb;
-    const txt = document.createElement('div'); txt.className = 'ob-txt';
-    txt.innerHTML = `<b>${t.name}</b><span>${t.desc}</span>`;
+    const row = document.createElement('div'); row.className = 'ob-row';
     const status = document.createElement('span'); status.className = 'ob-status'; status.dataset.id = t.id;
     status.textContent = '…'; status.style.color = 'var(--readout)';
-    row.append(cb, txt, status);
+    const txt = document.createElement('div'); txt.className = 'ob-txt';
+    txt.innerHTML = `<b>${t.name}</b><span>${t.desc}</span>`;
+    const actions = document.createElement('div'); actions.className = 'ob-row-actions';
+    const run = document.createElement('button'); run.className = 'ob-act'; run.title = `Run in terminal:  ${t.cmd}`;
+    run.innerHTML = lic('play') + '<span>Run</span>';
+    run.addEventListener('click', () => runInTerminal(t.cmd));
+    const guide = document.createElement('button'); guide.className = 'ob-act ob-act-ghost'; guide.title = t.url;
+    guide.innerHTML = lic('external-link') + '<span>Guide</span>';
+    guide.addEventListener('click', () => { if (t.url) window.api.openExternal(t.url); });
+    actions.append(run, guide);
+    row.append(status, txt, actions);
     list.appendChild(row);
   });
 
-  // Run all checks in parallel — show installed / not-installed status and pre-check missing tools
+  // Detect what's already installed (parallel) — purely informational now.
   INSTALL_TOOLS.forEach(async (t) => {
     const statusEl = ov.querySelector(`.ob-status[data-id="${t.id}"]`);
-    const cb = checks[t.id];
     try {
       const r = await window.api.runUsage(t.check);
-      if (r && r.ok) {
-        statusEl.textContent = '✓ installed'; statusEl.style.color = '#7bd88f';
-        cb.checked = false;   // already there — don't reinstall by default
-      } else {
-        statusEl.textContent = 'not installed'; statusEl.style.color = 'var(--readout)';
-        cb.checked = true;    // missing — check it for installation
-      }
-    } catch (_) { statusEl.textContent = ''; cb.checked = false; }
-  });
-  const log = ov.querySelector('.ob-log');
-  const finish = () => { localStorage.setItem(ONBOARD_KEY, '1'); ov.remove(); };
-  ov.querySelector('.ob-skip').addEventListener('click', finish);
-
-  ov.querySelector('.ob-install').addEventListener('click', async (e) => {
-    const btn = e.currentTarget; btn.disabled = true;
-    const chosen = INSTALL_TOOLS.filter((t) => checks[t.id].checked);
-    if (!chosen.length) { finish(); return; }
-    log.style.display = 'block'; log.textContent = '';
-    // Scroll the card so the log is visible
-    setTimeout(() => log.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 80);
-
-    for (const t of chosen) {
-      const status = ov.querySelector(`.ob-status[data-id="${t.id}"]`);
-      const cb = checks[t.id];
-      status.textContent = '⏳ installing…'; status.style.color = 'var(--readout)';
-      log.textContent += `\n── ${t.name} ──\n$ ${t.cmd}\n`;
-      log.scrollTop = log.scrollHeight;
-      const r = await window.api.installTool(t.id, t.cmd);
-      if (r && r.ok) {
-        status.textContent = '✓ Installed'; status.style.color = '#7bd88f';
-        // Uncheck and dim the row — it's done, no need to install again
-        cb.checked = false; cb.disabled = true;
-        const rowEl = cb.closest('label');
-        if (rowEl) { rowEl.style.opacity = '0.55'; rowEl.style.cursor = 'default'; rowEl.style.pointerEvents = 'none'; }
-      } else {
-        status.innerHTML = `<span style="color:#ff6b6b">✗ Failed</span> — <a class="prefs-link" href="#" data-url="https://www.google.com/search?q=${encodeURIComponent('install ' + t.name + ' mac')}">look up fix</a>`;
-        status.querySelector('a').addEventListener('click', (e) => { e.preventDefault(); window.api.openExternal(e.currentTarget.dataset.url); });
-      }
-      log.scrollTop = log.scrollHeight;
-    }
-    btn.textContent = 'All done'; btn.disabled = false;
-    btn.onclick = finish;
+      if (r && r.ok) { statusEl.textContent = '✓ installed'; statusEl.style.color = '#7bd88f'; }
+      else { statusEl.textContent = 'not installed'; statusEl.style.color = 'var(--readout)'; }
+    } catch (_) { statusEl.textContent = ''; }
   });
 
-  window.api.onInstallOutput(({ chunk }) => { log.textContent += chunk; log.scrollTop = log.scrollHeight; });
   renderIcons();
 }
 
