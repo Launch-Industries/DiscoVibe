@@ -109,7 +109,10 @@ ipcMain.handle('pty-spawn', (event, opts = {}) => {
       cols,
       rows,
       cwd: dir,
-      env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' }
+      // TERM_PROGRAM overridden so zsh's Apple-Terminal update_terminal_cwd hook
+      // doesn't try to write to a file descriptor only Terminal.app provides
+      // (otherwise: "update_terminal_cwd: bad file descriptor").
+      env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'xterm-256color', TERM_PROGRAM_VERSION: '' }
     });
   } catch (err) {
     return { ok: false, error: String(err && err.message ? err.message : err) };
@@ -304,7 +307,21 @@ function buildMenu() {
       ]
     },
     { role: 'editMenu' },
-    { role: 'viewMenu' },
+    {
+      // Custom View menu — deliberately OMITS Reload (Cmd+R) and Force Reload
+      // (Cmd+Shift+R). The default 'viewMenu' role binds those, and an accidental
+      // Cmd+R reloads the renderer and wipes every open terminal/pane (lost work).
+      label: 'View',
+      submenu: [
+        { role: 'toggleDevTools' },
+        { type: 'separator' },
+        { role: 'resetZoom' },
+        { role: 'zoomIn' },
+        { role: 'zoomOut' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' }
+      ]
+    },
     { role: 'windowMenu' }
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
