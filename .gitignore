@@ -4,3 +4,4 @@ dist/
 .DS_Store
 renderer/secrets.local.js
 license-signing-key.private.pem
+.env.notarize

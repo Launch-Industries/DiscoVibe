@@ -60,7 +60,7 @@ cd ~/Developer/discovibe
 # 2. Sign + notarize + publish to GitHub Releases in one step:
 export APPLE_ID="your-apple-id@email.com"
 export APPLE_APP_SPECIFIC_PASSWORD="abcd-efgh-ijkl-mnop"
-export APPLE_TEAM_ID="K2W6NQ6F66"
+export APPLE_TEAM_ID="2YX9U57HFL"
 export GH_TOKEN="<github personal access token with repo scope>"
 npm run release        # builds, signs, notarizes, uploads DMG+zip+latest-mac.yml to a GitHub Release
 ```
