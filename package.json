@@ -31,6 +31,7 @@
     "mac": {
       "category": "public.app-category.developer-tools",
       "target": [
+        { "target": "pkg", "arch": ["arm64", "x64"] },
         { "target": "dmg", "arch": ["arm64", "x64"] },
         { "target": "zip", "arch": ["arm64", "x64"] }
       ],
@@ -45,7 +46,11 @@
         "NSSpeechRecognitionUsageDescription": "DiscoVibe uses speech recognition to turn your spoken words into terminal commands."
       }
     },
-    "dmg": { "title": "DiscoVibe" }
+    "dmg": { "title": "DiscoVibe" },
+    "pkg": {
+      "installLocation": "/Applications",
+      "allowAnywhere": false
+    }
   },
   "devDependencies": {
     "@electron/rebuild": "^3.7.0",

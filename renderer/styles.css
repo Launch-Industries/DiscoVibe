@@ -215,16 +215,16 @@ body.dim-inactive .pane:not(.focused) .pane-body { filter: brightness(var(--dim-
   transition: border-color .25s ease;
 }
 
-/* Rename suggestion pill (when activity drifts off-context) */
-.rename-offer {
-  display: none; align-items: center; gap: 5px; flex: 0 0 auto;
-  background: rgba(255,209,0,.18); border: 1px solid #FFD100; color: inherit;
-  border-radius: 12px; padding: 1px 4px 1px 8px; font-size: 11px; font-weight: 700;
+/* AI-generated name shown next to the user's editable name in the pane header */
+.ai-name-sep {
+  flex: 0 0 auto; font-size: 14px; font-weight: 300; opacity: 0.35; padding: 0 2px;
+  pointer-events: none;
 }
-.rename-offer.show { display: inline-flex; }
-.rename-offer button { border: none; background: rgba(127,127,127,.25); color: inherit; cursor: pointer;
-  width: 18px; height: 18px; border-radius: 9px; display: inline-flex; align-items: center; justify-content: center; }
-.rename-offer button:hover { background: rgba(127,127,127,.45); }
+.ai-name {
+  flex: 0 1 auto; font-size: 13px; font-weight: 500; opacity: 0.72; font-style: italic;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+  pointer-events: none;
+}
 
 /* First-launch installer wizard + Preferences modal */
 #onboard, #prefs, #feedback-modal {
@@ -406,8 +406,11 @@ body.dim-inactive .pane:not(.focused) .pane-body { filter: brightness(var(--dim-
 .pane.web-mode .view-toggle { background: var(--accent); color: #06101f; }
 
 .pane-body .xterm { height: 100%; }
-.pane-body .xterm-viewport::-webkit-scrollbar { width: 9px; }
-.pane-body .xterm-viewport::-webkit-scrollbar-thumb { background: rgba(127,127,127,.4); border-radius: 6px; }
+.pane-body .xterm-viewport::-webkit-scrollbar { width: 14px; }
+.pane-body .xterm-viewport::-webkit-scrollbar-thumb {
+  background: rgba(127,127,127,.55); border-radius: 7px;
+  border: 3px solid transparent; background-clip: content-box;
+}
 
 /* ---- Attention bell flash ---- */
 @keyframes attn-pulse {

@@ -422,6 +422,7 @@ function createPane(opts = {}) {
     collapsed: false, attnTimer: null, chimeCount: 0, lastActivity: Date.now(), lastKeypress: 0,
     cwd: opts.cwd || settings.projectsDir || '',   // updated by OSC 7 or cd detection
     detectedTool: null,
+    aiName: opts.aiName || '',
   };
   // OSC 7: shell emits \x1b]7;file:///path\x07 after each prompt — track current directory
   if (term.parser && term.parser.registerOscHandler) {
@@ -442,14 +443,14 @@ function createPane(opts = {}) {
   term.onResize(({ cols, rows }) => window.api.resize(id, cols, rows));
   term.onBell(() => triggerAttention(pane));
 
-  // Follow the terminal title (OSC) — lets a program (or you) rename the window.
+  // Follow the terminal title (OSC) — update the AI name field, not the user's name.
   term.onTitleChange((title) => {
     if (!settings.nameFromTitle) return;
     const t = (title || '').trim();
     if (t.length < 2 || t.length > 60) return;
     if (/^~?\//.test(t) && !/\s/.test(t)) return;          // ignore bare paths
     if (/^\S+@\S+/.test(t)) return;                          // ignore user@host
-    pane.name = t; pane.nameInput.value = t; pane.manualName = false; scheduleSave();
+    pane.aiName = t; pane.aiNameEl.textContent = t; pane.aiSepEl.style.display = ''; scheduleSave();
   });
 
   // Click to position the shell cursor — HORIZONTAL only, and only on the line the
@@ -570,14 +571,19 @@ function createPane(opts = {}) {
   nameInput.addEventListener('change', () => { pane.name = nameInput.value; pane.manualName = true; scheduleSave(); });
   nameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { nameInput.blur(); term.focus(); } });
 
-  // Rename-suggestion pill (shown when activity drifts off the current name)
-  const offerEl = document.createElement('span'); offerEl.className = 'rename-offer';
-  nameInput.insertAdjacentElement('afterend', offerEl);
-  pane.offerEl = offerEl;
+  // AI-generated name displayed alongside the user's editable name
+  const aiSepEl = document.createElement('span'); aiSepEl.className = 'ai-name-sep'; aiSepEl.textContent = '·';
+  nameInput.insertAdjacentElement('afterend', aiSepEl);
+  pane.aiSepEl = aiSepEl;
+  const aiNameEl = document.createElement('span'); aiNameEl.className = 'ai-name';
+  aiSepEl.insertAdjacentElement('afterend', aiNameEl);
+  pane.aiNameEl = aiNameEl;
+  if (pane.aiName) aiNameEl.textContent = pane.aiName;
+  aiSepEl.style.display = pane.aiName ? '' : 'none';
 
   // AI-model badge (detected from the pane's recent output)
   const modelBadge = document.createElement('span'); modelBadge.className = 'model-badge';
-  offerEl.insertAdjacentElement('afterend', modelBadge);
+  aiNameEl.insertAdjacentElement('afterend', modelBadge);
   pane.modelBadge = modelBadge;
 
   // Per-window note ("what I'm working on") — saved with the session
@@ -675,6 +681,9 @@ function flashCap() {
 function closePane(id, skipRecord) {
   const i = panes.findIndex((p) => p.id === id);
   if (i === -1) return;
+  if (!skipRecord && panes.length === 1 && stored.length === 0) {
+    if (!confirm('Close the last terminal? This window will close.')) return;
+  }
   const pane = panes[i];
   if (!skipRecord) recordClosed(pane);
   clearAttention(pane);
@@ -935,6 +944,34 @@ function updateModelBadge(pane) {
 }
 setInterval(() => { for (const p of panes) updateModelBadge(p); }, 4000);
 
+// Scan non-focused panes for prompt-waiting patterns; alert after 30 s of idle time.
+const PROMPT_IDLE_MS = 30000;
+const PROMPT_PATTERNS = [
+  /\[y\/n\]/i, /\(y\/N\)/i, /\[yes\/no\]/i, /\(Y\/n\)/i,
+  /press enter/i, /press any key/i,
+];
+function scanForPrompt(pane) {
+  const buf = pane.term.buffer.active;
+  const start = Math.max(0, buf.length - 8);
+  for (let i = buf.length - 1; i >= start; i--) {
+    const ln = buf.getLine(i); if (!ln) continue;
+    const s = ln.translateToString(true);
+    if (!s.trim()) continue;
+    for (const re of PROMPT_PATTERNS) if (re.test(s)) return true;
+  }
+  return false;
+}
+setInterval(() => {
+  if (!alertsEnabled) return;
+  const now = Date.now();
+  for (const p of panes) {
+    if (p.id === focusedId) continue;
+    if (p.attnTimer) continue;
+    if (now - p.lastActivity < PROMPT_IDLE_MS) continue;
+    if (p.bellOn && scanForPrompt(p)) triggerAttention(p);
+  }
+}, 5000);
+
 // ===========================================================================
 // AI tool detection + session resume
 // ===========================================================================
@@ -1010,8 +1047,12 @@ async function autoNamePass(force) {
     try {
       const suggestion = await aiSuggestName(p);
       if (!suggestion) continue;
-      if (!p.manualName) { p.name = suggestion; p.nameInput.value = suggestion; scheduleSave(); }
-      else if (norm(suggestion) !== norm(p.nameInput.value) && suggestion !== p._dismissed) { showRenameOffer(p, suggestion); }
+      if (norm(suggestion) !== norm(p.aiName || '')) {
+        p.aiName = suggestion;
+        p.aiNameEl.textContent = suggestion;
+        p.aiSepEl.style.display = '';
+        scheduleSave();
+      }
     } catch (_) {}
   }
   autoNameBusy = false;
@@ -1647,7 +1688,7 @@ const LAYOUTS_KEY = 'tileterm.layouts.v1';
 function paneConfig(p, collapsed) {
   return { name: p.nameInput.value || p.name, color: p.color, bellOn: p.bellOn,
     webUrl: p.webUrl || '', note: p.note || '', manual: !!p.manualName, collapsed: !!collapsed,
-    cwd: p.cwd || '' };
+    cwd: p.cwd || '', aiName: p.aiName || '' };
 }
 function serializePanes() {
   return [...panes.map((p) => paneConfig(p, false)), ...stored.map((p) => paneConfig(p, true))];
