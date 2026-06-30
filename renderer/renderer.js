@@ -238,7 +238,9 @@ function triggerAttention(pane) {
   if (!alertsEnabled || !pane.bellOn) return;
   // Ignore bells that fire within 2 s of a keypress — these are shell feedback
   // (tab completion, mode-switch chimes) not an AI waiting for the user.
-  if (Date.now() - pane.lastActivity < 2000) return;
+  // Use lastKeypress (user input only), not lastActivity (which also updates on PTY output,
+  // which would suppress the bell fired by Claude at the end of its response).
+  if (Date.now() - pane.lastKeypress < 2000) return;
   pane.el.classList.add('attn');
   if (!pane.attnTimer) {
     pane.chimeCount = 0;
@@ -417,7 +419,7 @@ function createPane(opts = {}) {
     webview, webUrlInput, webMode: false, webUrl: opts.webUrl || '',
     bellOn: opts.bellOn !== false,
     note: opts.note || '', manualName: opts.manual !== undefined ? !!opts.manual : !!opts.name, noteBtn,
-    collapsed: false, attnTimer: null, chimeCount: 0, lastActivity: Date.now(),
+    collapsed: false, attnTimer: null, chimeCount: 0, lastActivity: Date.now(), lastKeypress: 0,
     cwd: opts.cwd || settings.projectsDir || '',   // updated by OSC 7 or cd detection
     detectedTool: null,
   };
@@ -436,7 +438,7 @@ function createPane(opts = {}) {
   if (!pane.bellOn) { bellToggle.querySelector('i')?.setAttribute('data-lucide', 'bell-off'); bellToggle.classList.add('off'); renderIcons(); }
 
   // PTY <-> terminal
-  term.onData((data) => { window.api.input(id, data); pane.lastActivity = Date.now(); clearAttention(pane); });
+  term.onData((data) => { window.api.input(id, data); pane.lastActivity = Date.now(); pane.lastKeypress = Date.now(); clearAttention(pane); });
   term.onResize(({ cols, rows }) => window.api.resize(id, cols, rows));
   term.onBell(() => triggerAttention(pane));
 
@@ -524,7 +526,27 @@ function createPane(opts = {}) {
 
   // Keyboard: Ctrl+Tab cycles; plain Tab cycles when the setting is on.
   term.attachCustomKeyEventHandler((e) => {
-    if (e.type !== 'keydown' || e.key !== 'Tab') return true;
+    if (e.type !== 'keydown') return true;
+
+    // Paste: Cmd+V — navigator.clipboard.readText not reliably wired in Electron xterm
+    if (e.metaKey && e.key === 'v') {
+      navigator.clipboard.readText()
+        .then((text) => { if (text) window.api.input(id, text); })
+        .catch(() => {});
+      return false;
+    }
+
+    // Copy: Cmd+C — copy terminal selection; without selection eat the event (Ctrl+C = SIGINT)
+    if (e.metaKey && e.key === 'c') {
+      if (term.hasSelection && term.hasSelection()) {
+        const sel = term.getSelection();
+        navigator.clipboard.writeText(sel).catch(() => {});
+        pushClip(sel);
+      }
+      return false;
+    }
+
+    if (e.key !== 'Tab') return true;
     const plain = !e.ctrlKey && !e.altKey && !e.metaKey;
     // Ctrl+Tab / Ctrl+Shift+Tab always cycle panes.
     if (e.ctrlKey) { cyclePane(e.shiftKey ? -1 : 1); return false; }
