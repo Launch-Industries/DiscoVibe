@@ -227,7 +227,7 @@ body.dim-inactive .pane:not(.focused) .pane-body { filter: brightness(var(--dim-
 }
 
 /* First-launch installer wizard + Preferences modal */
-#onboard, #prefs, #feedback-modal {
+#onboard, #prefs, #feedback-modal, #recover {
   position: fixed; inset: 0; z-index: 10000;
   background: rgba(2,3,10,.65); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
   display: flex; align-items: center; justify-content: center;
@@ -491,6 +491,39 @@ body.dim-inactive .pane:not(.focused) .pane-body { filter: brightness(var(--dim-
 .layout-row .lname { flex: 1 1 auto; font-weight: 600; }
 .layout-row button { flex: 0 0 auto; width: auto; padding: 4px 8px; }
 .layout-empty { opacity: .55; font-size: 12px; padding: 6px 2px; }
+
+/* Session recovery */
+.rec-list { max-height: 52vh; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
+.rec-row {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding: 10px 12px; border-radius: 10px;
+  border: 1px solid var(--pop-line); background: var(--btn-bg);
+  border-left: 4px solid var(--rec-color, var(--pop-line));
+}
+.rec-info { flex: 1 1 auto; min-width: 0; }
+.rec-name { font-weight: 700; font-size: 13px; display: flex; align-items: center; gap: 8px; }
+.rec-live {
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px;
+  padding: 1px 6px; border-radius: 999px; background: #2e7d32; color: #fff;
+}
+.rec-meta { font-size: 11px; color: var(--readout); margin-top: 2px; word-break: break-all; }
+.rec-prev {
+  font-family: ui-monospace, Menlo, monospace; font-size: 11px; opacity: .7;
+  margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.rec-btns { display: flex; flex-wrap: wrap; gap: 6px; flex: 0 0 auto; }
+.rec-btns button {
+  display: inline-flex; align-items: center; gap: 5px; cursor: pointer;
+  font-size: 12px; font-weight: 600; padding: 5px 9px; border-radius: 8px;
+  border: 1px solid var(--pop-line); background: var(--pop-bg); color: inherit;
+}
+.rec-btns button:hover { background: var(--btn-bg-hover); }
+.rec-body {
+  max-height: 58vh; overflow: auto; margin: 0; padding: 12px;
+  border-radius: 10px; border: 1px solid var(--pop-line); background: var(--btn-bg);
+  font-family: ui-monospace, Menlo, monospace; font-size: 12px; line-height: 1.45;
+  white-space: pre-wrap; word-break: break-word; user-select: text;
+}
 
 /* AI command accordion */
 .cmd-group-hd {
