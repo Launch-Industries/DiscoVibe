@@ -36,7 +36,8 @@ const settings = {
   projectsDir: '',           // new terminals open here (e.g. ~/Developer)
   openInApp: true,           // open clicked links in the pane's companion browser
   nameFromTitle: true,       // rename a pane when a program sets the terminal title (OSC)
-  showModel: true            // show the detected AI model (Opus/Sonnet/…) in the header
+  showModel: true,           // show the detected AI model (Opus/Sonnet/…) in the header
+  alertFocused: true         // also alert the pane you're working in when it waits on a prompt
 };
 
 // Optional AI clean-up of dictated speech (OpenAI-compatible endpoint, e.g. free Qwen on
@@ -407,6 +408,9 @@ function createPane(opts = {}) {
     fontSize: globalFontSize,
     lineHeight: 1.1, fontWeight: 500, fontWeightBold: 700,
     cursorBlink: true, allowProposedApi: true, scrollback: 10000, macOptionIsMeta: true,
+    // Option+drag forces a selection even when the running program (Claude Code, vim,
+    // less, tmux) has mouse reporting on and would otherwise swallow the drag.
+    macOptionClickForcesSelection: true,
     theme: { background: color, foreground: readableFg(color) }
   });
   const fitAddon = new FitAddon.FitAddon();
@@ -529,13 +533,11 @@ function createPane(opts = {}) {
   term.attachCustomKeyEventHandler((e) => {
     if (e.type !== 'keydown') return true;
 
-    // Paste: Cmd+V — navigator.clipboard.readText not reliably wired in Electron xterm
-    if (e.metaKey && e.key === 'v') {
-      navigator.clipboard.readText()
-        .then((text) => { if (text) window.api.input(id, text); })
-        .catch(() => {});
-      return false;
-    }
+    // Paste: Cmd+V is deliberately NOT handled here. The Edit menu role owns the
+    // accelerator and fires a real paste into xterm's textarea; xterm then emits it
+    // via onData with proper bracketed-paste framing. Intercepting it here sent the
+    // text a second time (doubled pastes) and skipped the \e[200~ wrapper, which
+    // broke multi-line pastes into Claude Code.
 
     // Copy: Cmd+C — copy terminal selection; without selection eat the event (Ctrl+C = SIGINT)
     if (e.metaKey && e.key === 'c') {
@@ -949,10 +951,19 @@ const PROMPT_IDLE_MS = 30000;
 const PROMPT_PATTERNS = [
   /\[y\/n\]/i, /\(y\/N\)/i, /\[yes\/no\]/i, /\(Y\/n\)/i,
   /press enter/i, /press any key/i,
+  // Claude Code permission / confirmation prompts. Deliberately NOT matching its idle
+  // input box — that's on screen whenever Claude is simply waiting, and would chime
+  // constantly. Only an explicit question counts.
+  /\bDo you want to\b/i,
+  /\bDo you trust the files\b/i,
+  /No, and tell Claude/i,
+  /❯?\s*1\.\s*Yes\b/,
 ];
 function scanForPrompt(pane) {
   const buf = pane.term.buffer.active;
-  const start = Math.max(0, buf.length - 8);
+  // 20 lines, not 8: a Claude Code prompt puts its question above the option list,
+  // box borders and hint line, so 8 rows can miss the question entirely.
+  const start = Math.max(0, buf.length - 20);
   for (let i = buf.length - 1; i >= start; i--) {
     const ln = buf.getLine(i); if (!ln) continue;
     const s = ln.translateToString(true);
@@ -965,7 +976,7 @@ setInterval(() => {
   if (!alertsEnabled) return;
   const now = Date.now();
   for (const p of panes) {
-    if (p.id === focusedId) continue;
+    if (p.id === focusedId && !settings.alertFocused) continue;
     if (p.attnTimer) continue;
     if (now - p.lastActivity < PROMPT_IDLE_MS) continue;
     if (p.bellOn && scanForPrompt(p)) triggerAttention(p);
@@ -1128,6 +1139,7 @@ function openPreferences() {
   const sec = (t) => { const d = document.createElement('div'); d.className = 'pop-title'; d.style.marginTop = '14px'; d.textContent = t; card.appendChild(d); };
 
   sec('Behavior');
+  card.appendChild(checkRow('Alert the terminal I’m working in', () => settings.alertFocused, (v) => { settings.alertFocused = v; settingsChanged(); }));
   card.appendChild(checkRow('Auto-collapse idle terminals', () => settings.autoCollapse, (v) => { settings.autoCollapse = v; settingsChanged(); }));
   card.appendChild(stepperRow('Idle minutes', () => settings.autoCollapseMin + 'm',
     () => { settings.autoCollapseMin = Math.max(1, settings.autoCollapseMin - 5); settingsChanged(); },
