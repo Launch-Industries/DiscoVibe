@@ -92,6 +92,163 @@ function createWindow(display, role) {
   return win;
 }
 
+// ---- Session transcripts ----------------------------------------------------
+// Every PTY's output is mirrored to a file under userData/transcripts as it
+// happens, so a terminal that gets closed by accident (or lost to a crash) can
+// still be read back afterwards. The recovery UI lives in the renderer.
+
+const MAX_TRANSCRIPTS = 200;          // keep at most this many sessions on disk
+const TRANSCRIPT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+const transcripts = new Map();        // ptyId -> { logPath, metaPath, meta, stream }
+let transcriptDirCache = null;
+
+function transcriptsDir() {
+  if (!transcriptDirCache) {
+    transcriptDirCache = path.join(app.getPath('userData'), 'transcripts');
+    try { fs.mkdirSync(transcriptDirCache, { recursive: true }); } catch (_) {}
+  }
+  return transcriptDirCache;
+}
+
+function writeTranscriptMeta(rec) {
+  try { fs.writeFileSync(rec.metaPath, JSON.stringify(rec.meta), 'utf8'); } catch (_) {}
+}
+
+function transcriptOpen(id, info = {}) {
+  transcriptClose(id);
+  const dir = transcriptsDir();
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const base = `${stamp}-${String(id).replace(/[^\w.-]+/g, '_')}`;
+  const rec = {
+    logPath: path.join(dir, base + '.log'),
+    metaPath: path.join(dir, base + '.json'),
+    meta: {
+      base,
+      paneId: id,
+      name: info.name || '',
+      color: info.color || '',
+      cwd: info.cwd || '',
+      started: Date.now(),
+      ended: null
+    },
+    stream: null
+  };
+  try { rec.stream = fs.createWriteStream(rec.logPath, { flags: 'a' }); } catch (_) { return null; }
+  rec.stream.on('error', () => {});
+  transcripts.set(id, rec);
+  writeTranscriptMeta(rec);
+  pruneTranscripts();
+  return base;
+}
+
+function transcriptWrite(id, data) {
+  const rec = transcripts.get(id);
+  if (rec && rec.stream) { try { rec.stream.write(data); } catch (_) {} }
+}
+
+function transcriptUpdate(id, patch) {
+  const rec = transcripts.get(id);
+  if (!rec) return;
+  Object.assign(rec.meta, patch || {});
+  writeTranscriptMeta(rec);
+}
+
+function transcriptClose(id) {
+  const rec = transcripts.get(id);
+  if (!rec) return;
+  rec.meta.ended = Date.now();
+  writeTranscriptMeta(rec);
+  try { rec.stream.end(); } catch (_) {}
+  transcripts.delete(id);
+}
+
+// Drop transcripts that are too old or beyond the cap. Never touches a session
+// that is still recording.
+function pruneTranscripts() {
+  const dir = transcriptsDir();
+  const live = new Set([...transcripts.values()].map((r) => r.meta.base));
+  let entries;
+  try { entries = fs.readdirSync(dir).filter((f) => f.endsWith('.json')); } catch (_) { return; }
+  const items = entries.map((f) => {
+    const base = f.slice(0, -5);
+    let meta = null;
+    try { meta = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); } catch (_) {}
+    return { base, started: (meta && meta.started) || 0 };
+  }).sort((a, b) => b.started - a.started);
+
+  const cutoff = Date.now() - TRANSCRIPT_MAX_AGE_MS;
+  items.forEach((it, idx) => {
+    if (live.has(it.base)) return;
+    if (idx < MAX_TRANSCRIPTS && it.started >= cutoff) return;
+    try { fs.unlinkSync(path.join(dir, it.base + '.log')); } catch (_) {}
+    try { fs.unlinkSync(path.join(dir, it.base + '.json')); } catch (_) {}
+  });
+}
+
+// Strip ANSI escapes / OSC sequences so a transcript reads as plain text.
+function stripAnsi(s) {
+  return String(s)
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+    .replace(/\x1b[@-Z\\-_]|\x1b\[[0-?]*[ -\/]*[@-~]/g, '')
+    .replace(/\r(?!\n)/g, '\n')
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '');
+}
+
+function readTranscriptText(base, maxBytes = 4 * 1024 * 1024) {
+  const file = path.join(transcriptsDir(), path.basename(base) + '.log');
+  let stat;
+  try { stat = fs.statSync(file); } catch (_) { return { ok: false, error: 'Transcript file is gone' }; }
+  const start = Math.max(0, stat.size - maxBytes);
+  let raw = '';
+  try {
+    const fd = fs.openSync(file, 'r');
+    const buf = Buffer.alloc(stat.size - start);
+    fs.readSync(fd, buf, 0, buf.length, start);
+    fs.closeSync(fd);
+    raw = buf.toString('utf8');
+  } catch (err) { return { ok: false, error: String(err.message || err) }; }
+  return { ok: true, text: stripAnsi(raw), truncated: start > 0, size: stat.size };
+}
+
+// Newest-first list of recorded sessions, each with a short tail preview.
+ipcMain.handle('list-transcripts', () => {
+  const dir = transcriptsDir();
+  const live = new Set([...transcripts.values()].map((r) => r.meta.base));
+  let files;
+  try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.json')); } catch (_) { return []; }
+  const out = [];
+  for (const f of files) {
+    let meta;
+    try { meta = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); } catch (_) { continue; }
+    const base = meta.base || f.slice(0, -5);
+    let size = 0;
+    try { size = fs.statSync(path.join(dir, base + '.log')).size; } catch (_) {}
+    const tail = readTranscriptText(base, 4000);
+    const preview = tail.ok
+      ? tail.text.split('\n').map((l) => l.trim()).filter(Boolean).slice(-3).join(' · ').slice(0, 220)
+      : '';
+    out.push({ ...meta, base, size, preview, active: live.has(base) });
+  }
+  return out.sort((a, b) => (b.started || 0) - (a.started || 0));
+});
+
+ipcMain.handle('read-transcript', (_e, { base }) => readTranscriptText(base));
+
+ipcMain.handle('delete-transcript', (_e, { base }) => {
+  const dir = transcriptsDir();
+  try { fs.unlinkSync(path.join(dir, path.basename(base) + '.log')); } catch (_) {}
+  try { fs.unlinkSync(path.join(dir, path.basename(base) + '.json')); } catch (_) {}
+  return { ok: true };
+});
+
+ipcMain.handle('reveal-transcript', (_e, { base }) => {
+  const file = path.join(transcriptsDir(), path.basename(base) + '.log');
+  if (fs.existsSync(file)) shell.showItemInFolder(file);
+  return { ok: fs.existsSync(file), path: file };
+});
+
+ipcMain.on('transcript-meta', (_e, { id, patch }) => transcriptUpdate(id, patch));
+
 // ---- PTY lifecycle over IPC -------------------------------------------------
 
 ipcMain.handle('pty-spawn', (event, opts = {}) => {
@@ -120,16 +277,19 @@ ipcMain.handle('pty-spawn', (event, opts = {}) => {
 
   ptys.set(id, proc);
   const wc = event.sender;
+  const transcript = transcriptOpen(id, { name: opts.name, color: opts.color, cwd: dir });
 
   proc.onData((data) => {
+    transcriptWrite(id, data);
     if (!wc.isDestroyed()) wc.send('pty-data', { id, data });
   });
   proc.onExit(({ exitCode }) => {
+    transcriptClose(id);
     if (!wc.isDestroyed()) wc.send('pty-exit', { id, exitCode });
     ptys.delete(id);
   });
 
-  return { ok: true, id, shell: shellPath, pid: proc.pid };
+  return { ok: true, id, shell: shellPath, pid: proc.pid, cwd: dir, transcript };
 });
 
 ipcMain.on('pty-input', (_e, { id, data }) => {
@@ -145,6 +305,7 @@ ipcMain.on('pty-resize', (_e, { id, cols, rows }) => {
 });
 
 ipcMain.on('pty-kill', (_e, { id }) => {
+  transcriptClose(id);
   const proc = ptys.get(id);
   if (proc) {
     try { proc.kill(); } catch (_) {}
@@ -283,6 +444,7 @@ function buildMenu() {
         { label: 'New Terminal (⌘T)', accelerator: 'CmdOrCtrl+T', click: () => sendToFocused('new-terminal') },
         { label: 'Close Terminal', accelerator: 'CmdOrCtrl+W', click: () => sendToFocused('close-terminal') },
         { label: 'Reopen Closed Terminal', accelerator: 'CmdOrCtrl+Shift+T', click: () => sendToFocused('reopen-closed') },
+        { label: 'Recover Session…', accelerator: 'CmdOrCtrl+Shift+R', click: () => sendToFocused('recover-sessions') },
         { label: 'Close ALL Terminals (Killswitch)', accelerator: 'CmdOrCtrl+Shift+K', click: () => sendToFocused('kill-all') },
         { type: 'separator' },
         { label: 'Save Terminal Output…', accelerator: 'CmdOrCtrl+S', click: () => sendToFocused('save-output') },
@@ -296,7 +458,24 @@ function buildMenu() {
         { label: 'Toggle Alerts (flash + chime)', accelerator: 'CmdOrCtrl+E', click: () => sendToFocused('toggle-alerts') }
       ]
     },
-    { role: 'editMenu' },
+    {
+      // Custom Edit menu. The default 'editMenu' role binds Cmd+C to the native
+      // Copy, which acts on the hidden xterm helper textarea and only ever holds
+      // the current line — that's what truncated multi-line copies to one line.
+      // Copy is routed to the renderer instead, which reads the real terminal
+      // selection. Paste stays a role: it fires a native paste into xterm's
+      // textarea, which is what produces correct bracketed-paste framing.
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { label: 'Copy', accelerator: 'CmdOrCtrl+C', click: () => sendToFocused('copy') },
+        { role: 'paste' },
+        { label: 'Select All', accelerator: 'CmdOrCtrl+A', click: () => sendToFocused('select-all') }
+      ]
+    },
     {
       // Custom View menu — deliberately OMITS Reload (Cmd+R) and Force Reload
       // (Cmd+Shift+R). The default 'viewMenu' role binds those, and an accidental
@@ -385,7 +564,8 @@ app.whenReady().then(() => {
     createWindow(screen.getPrimaryDisplay(), 'primary');
   }
 
-  app.on('before-quit', () => { isQuitting = true; });
+  // Finalize every open transcript on quit so recovery sees a clean end time.
+  app.on('before-quit', () => { isQuitting = true; [...transcripts.keys()].forEach(transcriptClose); });
   // Check for updates 5 seconds after launch (only in packaged builds)
   if (app.isPackaged) setTimeout(() => autoUpdater.checkForUpdates().catch(() => {}), 5000);
 

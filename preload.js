@@ -20,6 +20,13 @@ contextBridge.exposeInMainWorld('api', {
   // Save terminal output
   saveOutput: (name, text) => ipcRenderer.invoke('save-output', { name, text }),
 
+  // Session transcripts (recover a closed terminal's output)
+  listTranscripts: () => ipcRenderer.invoke('list-transcripts'),
+  readTranscript: (base) => ipcRenderer.invoke('read-transcript', { base }),
+  deleteTranscript: (base) => ipcRenderer.invoke('delete-transcript', { base }),
+  revealTranscript: (base) => ipcRenderer.invoke('reveal-transcript', { base }),
+  transcriptMeta: (id, patch) => ipcRenderer.send('transcript-meta', { id, patch }),
+
   // Companion browser / folders
   pickFile: () => ipcRenderer.invoke('pick-file'),
   pickFolder: () => ipcRenderer.invoke('pick-folder'),

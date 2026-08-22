@@ -2,7 +2,8 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-# Loads local Apple credentials and produces a SIGNED + NOTARIZED DiscoVibe DMG.
+# Loads local Apple credentials and produces SIGNED + NOTARIZED DiscoVibe DMG, PKG, and ZIP
+# for both Apple Silicon (arm64) and Intel (x64).
 # Prereqs (one-time): Developer ID Application cert in keychain + filled-in .env.notarize
 
 if [[ ! -f .env.notarize ]]; then
@@ -23,15 +24,24 @@ if ! security find-identity -v -p codesigning | grep -q "Developer ID Applicatio
   exit 1
 fi
 
-echo "▸ Building signed + notarized DMG (this calls Apple's notary service; can take a few minutes)…"
+echo "▸ Building signed + notarized installers for Apple Silicon and Intel…"
+echo "  (This calls Apple's notary service — can take a few minutes.)"
 npm run dist
 
 echo
-echo "▸ Verifying Gatekeeper acceptance on the built app…"
-APP_PATH="dist/mac-arm64/DiscoVibe.app"
-if [[ -d "$APP_PATH" ]]; then
-  spctl --assess --type execute --verbose "$APP_PATH" || true
-  codesign --verify --deep --strict --verbose=2 "$APP_PATH" || true
-fi
+echo "▸ Verifying Gatekeeper acceptance on built apps…"
+for APP_PATH in dist/mac-arm64/DiscoVibe.app dist/mac/DiscoVibe.app; do
+  if [[ -d "$APP_PATH" ]]; then
+    echo "  Checking $APP_PATH"
+    spctl --assess --type execute --verbose "$APP_PATH" || true
+    codesign --verify --deep --strict --verbose=2 "$APP_PATH" || true
+  fi
+done
+
 echo
-echo "✓ Done. Distributable DMG is in dist/ (DiscoVibe-<version>-arm64.dmg)."
+echo "✓ Done. Distributable files are in dist/:"
+ls dist/*.dmg dist/*.pkg 2>/dev/null || true
+echo
+echo "To publish to GitHub Releases (auto-update + public download):"
+echo "  export GH_TOKEN=<token with repo scope>"
+echo "  npm run release"

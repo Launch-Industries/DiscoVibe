@@ -36,7 +36,8 @@ const settings = {
   projectsDir: '',           // new terminals open here (e.g. ~/Developer)
   openInApp: true,           // open clicked links in the pane's companion browser
   nameFromTitle: true,       // rename a pane when a program sets the terminal title (OSC)
-  showModel: true            // show the detected AI model (Opus/Sonnet/…) in the header
+  showModel: true,           // show the detected AI model (Opus/Sonnet/…) in the header
+  alertFocused: true         // also alert the pane you're working in when it waits on a prompt
 };
 
 // Optional AI clean-up of dictated speech (OpenAI-compatible endpoint, e.g. free Qwen on
@@ -407,6 +408,9 @@ function createPane(opts = {}) {
     fontSize: globalFontSize,
     lineHeight: 1.1, fontWeight: 500, fontWeightBold: 700,
     cursorBlink: true, allowProposedApi: true, scrollback: 10000, macOptionIsMeta: true,
+    // Option+drag forces a selection even when the running program (Claude Code, vim,
+    // less, tmux) has mouse reporting on and would otherwise swallow the drag.
+    macOptionClickForcesSelection: true,
     theme: { background: color, foreground: readableFg(color) }
   });
   const fitAddon = new FitAddon.FitAddon();
@@ -422,11 +426,18 @@ function createPane(opts = {}) {
     collapsed: false, attnTimer: null, chimeCount: 0, lastActivity: Date.now(), lastKeypress: 0,
     cwd: opts.cwd || settings.projectsDir || '',   // updated by OSC 7 or cd detection
     detectedTool: null,
+    aiName: opts.aiName || '',
   };
   // OSC 7: shell emits \x1b]7;file:///path\x07 after each prompt — track current directory
   if (term.parser && term.parser.registerOscHandler) {
     term.parser.registerOscHandler(7, (data) => {
-      try { pane.cwd = decodeURIComponent(new URL(data).pathname); } catch (_) {}
+      try {
+        const next = decodeURIComponent(new URL(data).pathname);
+        if (next && next !== pane.cwd) {
+          pane.cwd = next;
+          window.api.transcriptMeta(id, { cwd: next });   // so recovery reopens here
+        }
+      } catch (_) {}
       return false;
     });
   }
@@ -442,14 +453,14 @@ function createPane(opts = {}) {
   term.onResize(({ cols, rows }) => window.api.resize(id, cols, rows));
   term.onBell(() => triggerAttention(pane));
 
-  // Follow the terminal title (OSC) — lets a program (or you) rename the window.
+  // Follow the terminal title (OSC) — update the AI name field, not the user's name.
   term.onTitleChange((title) => {
     if (!settings.nameFromTitle) return;
     const t = (title || '').trim();
     if (t.length < 2 || t.length > 60) return;
     if (/^~?\//.test(t) && !/\s/.test(t)) return;          // ignore bare paths
     if (/^\S+@\S+/.test(t)) return;                          // ignore user@host
-    pane.name = t; pane.nameInput.value = t; pane.manualName = false; scheduleSave();
+    pane.aiName = t; pane.aiNameEl.textContent = t; pane.aiSepEl.style.display = ''; scheduleSave();
   });
 
   // Click to position the shell cursor — HORIZONTAL only, and only on the line the
@@ -528,23 +539,15 @@ function createPane(opts = {}) {
   term.attachCustomKeyEventHandler((e) => {
     if (e.type !== 'keydown') return true;
 
-    // Paste: Cmd+V — navigator.clipboard.readText not reliably wired in Electron xterm
-    if (e.metaKey && e.key === 'v') {
-      navigator.clipboard.readText()
-        .then((text) => { if (text) window.api.input(id, text); })
-        .catch(() => {});
-      return false;
-    }
+    // Paste: Cmd+V is deliberately NOT handled here. The Edit menu role owns the
+    // accelerator and fires a real paste into xterm's textarea; xterm then emits it
+    // via onData with proper bracketed-paste framing. Intercepting it here sent the
+    // text a second time (doubled pastes) and skipped the \e[200~ wrapper, which
+    // broke multi-line pastes into Claude Code.
 
-    // Copy: Cmd+C — copy terminal selection; without selection eat the event (Ctrl+C = SIGINT)
-    if (e.metaKey && e.key === 'c') {
-      if (term.hasSelection && term.hasSelection()) {
-        const sel = term.getSelection();
-        navigator.clipboard.writeText(sel).catch(() => {});
-        pushClip(sel);
-      }
-      return false;
-    }
+    // Copy: Cmd+C is owned by the Edit menu item, which calls copyFocusedSelection()
+    // in the renderer. Handling it here as well raced the menu and could leave the
+    // clipboard holding only the current line.
 
     if (e.key !== 'Tab') return true;
     const plain = !e.ctrlKey && !e.altKey && !e.metaKey;
@@ -567,17 +570,26 @@ function createPane(opts = {}) {
   if (term.textarea) term.textarea.addEventListener('focus', acknowledge);
 
   // Rename (a manual edit stops AI auto-naming for this pane)
-  nameInput.addEventListener('change', () => { pane.name = nameInput.value; pane.manualName = true; scheduleSave(); });
+  nameInput.addEventListener('change', () => {
+    pane.name = nameInput.value; pane.manualName = true;
+    window.api.transcriptMeta(id, { name: pane.name });
+    scheduleSave();
+  });
   nameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { nameInput.blur(); term.focus(); } });
 
-  // Rename-suggestion pill (shown when activity drifts off the current name)
-  const offerEl = document.createElement('span'); offerEl.className = 'rename-offer';
-  nameInput.insertAdjacentElement('afterend', offerEl);
-  pane.offerEl = offerEl;
+  // AI-generated name displayed alongside the user's editable name
+  const aiSepEl = document.createElement('span'); aiSepEl.className = 'ai-name-sep'; aiSepEl.textContent = '·';
+  nameInput.insertAdjacentElement('afterend', aiSepEl);
+  pane.aiSepEl = aiSepEl;
+  const aiNameEl = document.createElement('span'); aiNameEl.className = 'ai-name';
+  aiSepEl.insertAdjacentElement('afterend', aiNameEl);
+  pane.aiNameEl = aiNameEl;
+  if (pane.aiName) aiNameEl.textContent = pane.aiName;
+  aiSepEl.style.display = pane.aiName ? '' : 'none';
 
   // AI-model badge (detected from the pane's recent output)
   const modelBadge = document.createElement('span'); modelBadge.className = 'model-badge';
-  offerEl.insertAdjacentElement('afterend', modelBadge);
+  aiNameEl.insertAdjacentElement('afterend', modelBadge);
   pane.modelBadge = modelBadge;
 
   // Per-window note ("what I'm working on") — saved with the session
@@ -632,8 +644,15 @@ function createPane(opts = {}) {
 
   // Spawn the shell
   fitAddon.fit();
-  window.api.spawn({ id, cols: term.cols || 80, rows: term.rows || 24, cwd: settings.projectsDir || undefined }).then((res) => {
-    if (!res || !res.ok) term.writeln('\x1b[31mFailed to start shell: ' + (res && res.error ? res.error : 'unknown') + '\x1b[0m');
+  window.api.spawn({
+    id, cols: term.cols || 80, rows: term.rows || 24,
+    // opts.cwd wins so a recovered session reopens in the directory it was in.
+    cwd: opts.cwd || settings.projectsDir || undefined,
+    name, color
+  }).then((res) => {
+    if (!res || !res.ok) { term.writeln('\x1b[31mFailed to start shell: ' + (res && res.error ? res.error : 'unknown') + '\x1b[0m'); return; }
+    pane.transcript = res.transcript || '';
+    if (res.cwd) pane.cwd = res.cwd;
   });
 
   return pane;
@@ -675,6 +694,9 @@ function flashCap() {
 function closePane(id, skipRecord) {
   const i = panes.findIndex((p) => p.id === id);
   if (i === -1) return;
+  if (!skipRecord && panes.length === 1 && stored.length === 0) {
+    if (!confirm('Close the last terminal? This window will close.')) return;
+  }
   const pane = panes[i];
   if (!skipRecord) recordClosed(pane);
   clearAttention(pane);
@@ -935,6 +957,43 @@ function updateModelBadge(pane) {
 }
 setInterval(() => { for (const p of panes) updateModelBadge(p); }, 4000);
 
+// Scan non-focused panes for prompt-waiting patterns; alert after 30 s of idle time.
+const PROMPT_IDLE_MS = 30000;
+const PROMPT_PATTERNS = [
+  /\[y\/n\]/i, /\(y\/N\)/i, /\[yes\/no\]/i, /\(Y\/n\)/i,
+  /press enter/i, /press any key/i,
+  // Claude Code permission / confirmation prompts. Deliberately NOT matching its idle
+  // input box — that's on screen whenever Claude is simply waiting, and would chime
+  // constantly. Only an explicit question counts.
+  /\bDo you want to\b/i,
+  /\bDo you trust the files\b/i,
+  /No, and tell Claude/i,
+  /❯?\s*1\.\s*Yes\b/,
+];
+function scanForPrompt(pane) {
+  const buf = pane.term.buffer.active;
+  // 20 lines, not 8: a Claude Code prompt puts its question above the option list,
+  // box borders and hint line, so 8 rows can miss the question entirely.
+  const start = Math.max(0, buf.length - 20);
+  for (let i = buf.length - 1; i >= start; i--) {
+    const ln = buf.getLine(i); if (!ln) continue;
+    const s = ln.translateToString(true);
+    if (!s.trim()) continue;
+    for (const re of PROMPT_PATTERNS) if (re.test(s)) return true;
+  }
+  return false;
+}
+setInterval(() => {
+  if (!alertsEnabled) return;
+  const now = Date.now();
+  for (const p of panes) {
+    if (p.id === focusedId && !settings.alertFocused) continue;
+    if (p.attnTimer) continue;
+    if (now - p.lastActivity < PROMPT_IDLE_MS) continue;
+    if (p.bellOn && scanForPrompt(p)) triggerAttention(p);
+  }
+}, 5000);
+
 // ===========================================================================
 // AI tool detection + session resume
 // ===========================================================================
@@ -1010,8 +1069,12 @@ async function autoNamePass(force) {
     try {
       const suggestion = await aiSuggestName(p);
       if (!suggestion) continue;
-      if (!p.manualName) { p.name = suggestion; p.nameInput.value = suggestion; scheduleSave(); }
-      else if (norm(suggestion) !== norm(p.nameInput.value) && suggestion !== p._dismissed) { showRenameOffer(p, suggestion); }
+      if (norm(suggestion) !== norm(p.aiName || '')) {
+        p.aiName = suggestion;
+        p.aiNameEl.textContent = suggestion;
+        p.aiSepEl.style.display = '';
+        scheduleSave();
+      }
     } catch (_) {}
   }
   autoNameBusy = false;
@@ -1087,6 +1150,7 @@ function openPreferences() {
   const sec = (t) => { const d = document.createElement('div'); d.className = 'pop-title'; d.style.marginTop = '14px'; d.textContent = t; card.appendChild(d); };
 
   sec('Behavior');
+  card.appendChild(checkRow('Alert the terminal I’m working in', () => settings.alertFocused, (v) => { settings.alertFocused = v; settingsChanged(); }));
   card.appendChild(checkRow('Auto-collapse idle terminals', () => settings.autoCollapse, (v) => { settings.autoCollapse = v; settingsChanged(); }));
   card.appendChild(stepperRow('Idle minutes', () => settings.autoCollapseMin + 'm',
     () => { settings.autoCollapseMin = Math.max(1, settings.autoCollapseMin - 5); settingsChanged(); },
@@ -1303,7 +1367,14 @@ function loadClosed() { try { return JSON.parse(localStorage.getItem(CLOSED_KEY)
 function saveClosed(list) { try { localStorage.setItem(CLOSED_KEY, JSON.stringify(list.slice(0, 12))); } catch (_) {} }
 function recordClosed(pane) {
   const list = loadClosed();
-  list.unshift({ name: pane.nameInput.value || pane.name, color: pane.color, webUrl: pane.webUrl || '' });
+  list.unshift({
+    name: pane.nameInput.value || pane.name,
+    color: pane.color,
+    webUrl: pane.webUrl || '',
+    cwd: pane.cwd || '',
+    transcript: pane.transcript || '',
+    closedAt: Date.now()
+  });
   saveClosed(list);
 }
 function reopenClosed(entry) {
@@ -1312,7 +1383,161 @@ function reopenClosed(entry) {
   if (!cfg) { flashMsg('No recently closed terminals'); return; }
   if (entry) { const i = list.findIndex((e) => e === entry); if (i >= 0) list.splice(i, 1); }
   saveClosed(list);
-  addPane({ name: cfg.name, color: cfg.color, webUrl: cfg.webUrl });
+  addPane({ name: cfg.name, color: cfg.color, webUrl: cfg.webUrl, cwd: cfg.cwd });
+}
+
+// ===========================================================================
+// Session recovery — every terminal's output is mirrored to disk by the main
+// process, so a pane closed by accident (or lost to a crash/quit) can still be
+// read, searched, saved, and reopened in the same directory. Cmd+Shift+R.
+// ===========================================================================
+function fmtWhen(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  const mins = Math.round((Date.now() - ts) / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins} min ago`;
+  if (mins < 60 * 24) return `${Math.round(mins / 60)} hr ago`;
+  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+function fmtSize(n) {
+  if (!n) return '0 B';
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return Math.round(n / 1024) + ' KB';
+  return (n / 1048576).toFixed(1) + ' MB';
+}
+
+async function openRecovery() {
+  if (document.getElementById('recover')) return;
+  const ov = document.createElement('div'); ov.id = 'recover';
+  const card = document.createElement('div'); card.className = 'ob-card'; card.style.maxWidth = '760px';
+  ov.appendChild(card);
+  const close = () => ov.remove();
+  ov.addEventListener('mousedown', (e) => { if (e.target === ov) close(); });
+  document.addEventListener('keydown', function esc(e) {
+    if (e.key === 'Escape' && document.getElementById('recover')) { close(); document.removeEventListener('keydown', esc); }
+  });
+
+  const head = document.createElement('div'); head.className = 'ob-head';
+  head.innerHTML = lic('history') + ' Recover a session';
+  const sub = document.createElement('div'); sub.className = 'ob-sub';
+  sub.textContent = 'Every terminal is recorded as it runs. Closed one by accident? Read it back here, save it, or reopen a terminal in the same folder.';
+  card.append(head, sub);
+
+  const search = document.createElement('input'); search.type = 'search';
+  search.placeholder = 'Search names, folders, and output…';
+  search.style.cssText = 'width:100%;background:var(--btn-bg);color:inherit;border:1px solid var(--pop-line);border-radius:8px;padding:8px;font:inherit;font-size:13px;box-sizing:border-box;margin-bottom:10px;';
+  card.appendChild(search);
+
+  const list = document.createElement('div'); list.className = 'rec-list';
+  card.appendChild(list);
+
+  const actions = document.createElement('div'); actions.className = 'ob-actions';
+  const done = document.createElement('button'); done.className = 'ob-skip'; done.textContent = 'Close';
+  done.addEventListener('click', close);
+  actions.appendChild(done);
+  card.appendChild(actions);
+
+  document.body.appendChild(ov);
+  renderIcons();
+
+  let sessions = [];
+  try { sessions = await window.api.listTranscripts(); } catch (_) {}
+
+  const render = () => {
+    const q = search.value.trim().toLowerCase();
+    const shown = sessions.filter((s) => !q
+      || (s.name || '').toLowerCase().includes(q)
+      || (s.cwd || '').toLowerCase().includes(q)
+      || (s.preview || '').toLowerCase().includes(q));
+    list.innerHTML = '';
+    if (!shown.length) {
+      const empty = document.createElement('div'); empty.className = 'layout-empty';
+      empty.textContent = sessions.length ? 'Nothing matches that search.' : 'No recorded sessions yet. New terminals are recorded from now on.';
+      list.appendChild(empty);
+      return;
+    }
+    for (const s of shown) {
+      const row = document.createElement('div'); row.className = 'rec-row';
+      if (s.color) row.style.setProperty('--rec-color', s.color);
+
+      const info = document.createElement('div'); info.className = 'rec-info';
+      const title = document.createElement('div'); title.className = 'rec-name';
+      title.textContent = s.name || 'Terminal';
+      if (s.active) { const b = document.createElement('span'); b.className = 'rec-live'; b.textContent = 'recording'; title.appendChild(b); }
+      const meta = document.createElement('div'); meta.className = 'rec-meta';
+      meta.textContent = [fmtWhen(s.started), s.cwd || '', fmtSize(s.size)].filter(Boolean).join('  ·  ');
+      const prev = document.createElement('div'); prev.className = 'rec-prev';
+      prev.textContent = s.preview || '(no output captured)';
+      info.append(title, meta, prev);
+
+      const btns = document.createElement('div'); btns.className = 'rec-btns';
+      const view = document.createElement('button'); view.innerHTML = lic('file-text') + '<span>View</span>';
+      view.addEventListener('click', () => viewTranscript(s));
+      const reopen = document.createElement('button'); reopen.innerHTML = lic('rotate-ccw') + '<span>Reopen here</span>';
+      reopen.title = s.cwd ? 'New terminal in ' + s.cwd : 'New terminal';
+      reopen.addEventListener('click', () => { addPane({ name: s.name, color: s.color, cwd: s.cwd }); close(); });
+      const save = document.createElement('button'); save.innerHTML = lic('save') + '<span>Save…</span>';
+      save.addEventListener('click', async () => {
+        const r = await window.api.readTranscript(s.base);
+        if (!r || !r.ok) { flashMsg('Could not read transcript'); return; }
+        const w = await window.api.saveOutput(s.name || 'session', r.text);
+        if (w && w.ok) flashMsg('Saved ✓');
+      });
+      const del = document.createElement('button'); del.innerHTML = lic('trash-2');
+      del.title = 'Delete this transcript';
+      del.addEventListener('click', async () => {
+        if (!confirm(`Delete the saved transcript for "${s.name || 'Terminal'}"? This can't be undone.`)) return;
+        await window.api.deleteTranscript(s.base);
+        sessions = sessions.filter((x) => x.base !== s.base);
+        render();
+      });
+      btns.append(view, reopen, save, del);
+
+      row.append(info, btns);
+      list.appendChild(row);
+    }
+    renderIcons();
+  };
+  search.addEventListener('input', render);
+  render();
+  setTimeout(() => search.focus(), 60);
+}
+
+// Read a recorded session back, with select-all + copy that actually work.
+async function viewTranscript(s) {
+  const r = await window.api.readTranscript(s.base);
+  if (!r || !r.ok) { flashMsg('Could not read transcript'); return; }
+  const ov = document.createElement('div'); ov.id = 'recover';
+  const card = document.createElement('div'); card.className = 'ob-card'; card.style.maxWidth = '900px';
+  ov.appendChild(card);
+  const close = () => ov.remove();
+  ov.addEventListener('mousedown', (e) => { if (e.target === ov) close(); });
+
+  const head = document.createElement('div'); head.className = 'ob-head';
+  head.innerHTML = lic('file-text') + ' ' + (s.name || 'Session');
+  const sub = document.createElement('div'); sub.className = 'ob-sub';
+  sub.textContent = [fmtWhen(s.started), s.cwd || '', r.truncated ? 'showing the last 4 MB' : ''].filter(Boolean).join('  ·  ');
+  card.append(head, sub);
+
+  const pre = document.createElement('pre'); pre.className = 'rec-body';
+  pre.textContent = r.text;
+  card.appendChild(pre);
+
+  const actions = document.createElement('div'); actions.className = 'ob-actions';
+  const back = document.createElement('button'); back.className = 'ob-skip'; back.textContent = 'Close';
+  back.addEventListener('click', close);
+  const copyAll = document.createElement('button'); copyAll.className = 'pop-custom'; copyAll.style.flex = '0 0 auto';
+  copyAll.innerHTML = lic('clipboard') + '<span>Copy all</span>';
+  copyAll.addEventListener('click', () => {
+    navigator.clipboard.writeText(r.text).then(() => { pushClip(r.text); flashMsg('Copied ✓'); }).catch(() => flashMsg('Copy failed'));
+  });
+  actions.append(back, copyAll);
+  card.appendChild(actions);
+
+  document.body.appendChild(ov);
+  renderIcons();
+  pre.scrollTop = pre.scrollHeight;
 }
 
 // Clipboard history — remembers the last 10 things you copied.
@@ -1647,7 +1872,7 @@ const LAYOUTS_KEY = 'tileterm.layouts.v1';
 function paneConfig(p, collapsed) {
   return { name: p.nameInput.value || p.name, color: p.color, bellOn: p.bellOn,
     webUrl: p.webUrl || '', note: p.note || '', manual: !!p.manualName, collapsed: !!collapsed,
-    cwd: p.cwd || '' };
+    cwd: p.cwd || '', aiName: p.aiName || '' };
 }
 function serializePanes() {
   return [...panes.map((p) => paneConfig(p, false)), ...stored.map((p) => paneConfig(p, true))];
@@ -1890,8 +2115,42 @@ function saveFocusedOutput() {
   window.api.saveOutput(pane.nameInput.value || pane.name, text).then((r) => { if (r && r.ok) flashMsg('Saved ✓'); });
 }
 
+// Cmd+C from the Edit menu. Inputs/textareas and normal page text keep the
+// native behaviour; inside a terminal we copy xterm's real selection, which is
+// the whole multi-line block (the native copy only ever saw the current line).
+function copyFocusedSelection() {
+  const el = document.activeElement;
+  const isField = el && (el.tagName === 'INPUT' || (el.tagName === 'TEXTAREA' && !el.classList.contains('xterm-helper-textarea')));
+  if (isField && el.selectionStart !== el.selectionEnd) {
+    const text = el.value.slice(el.selectionStart, el.selectionEnd);
+    navigator.clipboard.writeText(text).catch(() => {});
+    pushClip(text);
+    return;
+  }
+  const pane = focusedPane();
+  if (pane && pane.term.hasSelection && pane.term.hasSelection()) {
+    const sel = pane.term.getSelection();
+    navigator.clipboard.writeText(sel).then(() => flashMsg('Copied ✓')).catch(() => {});
+    pushClip(sel);
+    return;
+  }
+  // Fall back to any regular page selection (transcript viewer, popovers).
+  const sel = String(window.getSelection() || '');
+  if (sel.trim()) { navigator.clipboard.writeText(sel).catch(() => {}); pushClip(sel); }
+}
+
+function selectAllFocused() {
+  const el = document.activeElement;
+  if (el && (el.tagName === 'INPUT' || (el.tagName === 'TEXTAREA' && !el.classList.contains('xterm-helper-textarea')))) { el.select(); return; }
+  const pane = focusedPane();
+  if (pane) pane.term.selectAll();
+}
+
 window.api.onMenu((action) => {
   if (action === 'new-terminal') addPane();
+  else if (action === 'copy') copyFocusedSelection();
+  else if (action === 'select-all') selectAllFocused();
+  else if (action === 'recover-sessions') openRecovery();
   else if (action === 'close-terminal' && focusedId) closePane(focusedId);
   else if (action === 'reopen-closed') reopenClosed();
   else if (action === 'kill-all') killAll();
