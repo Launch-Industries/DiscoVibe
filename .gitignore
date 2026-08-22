@@ -5,3 +5,5 @@ dist/
 renderer/secrets.local.js
 license-signing-key.private.pem
 .env.notarize
+
+supabase/.temp/
