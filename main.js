@@ -8,6 +8,16 @@ const { spawn } = require('child_process');
 const pty = require('node-pty');
 const { autoUpdater } = require('electron-updater');
 
+// Dev runs (`npm start`) share a userData dir with an installed DiscoVibe.app,
+// so the single-instance lock below made them quit on the spot, silently, any
+// time the packaged app was already open. Give unpackaged runs their own dir
+// (and therefore their own lock and their own saved layout). An explicit
+// --user-data-dir on the command line still wins.
+if (!app.isPackaged && !process.argv.some((a) => a.startsWith('--user-data-dir'))) {
+  const dir = app.getPath('userData');
+  app.setPath('userData', path.join(path.dirname(dir), path.basename(dir) + ' (dev)'));
+}
+
 function loginShell() { return process.env.SHELL || '/bin/zsh'; }
 
 // Map of paneId -> pty process (ids are globally unique across all windows)
@@ -89,27 +99,49 @@ ipcMain.on('set-window-title', (event, { title }) => {
 // A frameless 560x360 window on the app's own --chrome-bg, shown while the first
 // renderer boots. Held only as long as that takes: a fixed minimum would make
 // startup feel slower than it is.
+const SPLASH_MIN_MS = 4000;   // deliberate hold, not a load time
 let splashWin = null;
+let splashShownAt = 0;
+let splashTimer = null;
+
 function createSplash() {
+  const b = screen.getPrimaryDisplay().bounds;
   splashWin = new BrowserWindow({
-    width: 560, height: 360,
-    frame: false, transparent: true, resizable: false, movable: false,
-    center: true, show: false, skipTaskbar: true, alwaysOnTop: true,
-    backgroundColor: '#00000000',
+    x: b.x, y: b.y, width: b.width, height: b.height,
+    frame: false, transparent: false, resizable: false, movable: false,
+    show: false, skipTaskbar: true, alwaysOnTop: true, fullscreenable: false,
+    backgroundColor: '#04050f',
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true }
   });
+  // Above the menu bar and Dock, so full screen means the whole screen. Not
+  // macOS's native fullscreen, which would animate into its own Space and take
+  // longer to leave than the splash is on screen for.
+  splashWin.setAlwaysOnTop(true, 'screen-saver');
   splashWin.loadFile(path.join(__dirname, 'renderer', 'splash.html'), {
     query: { v: app.getVersion() }   // never hardcode the number; it drifts
   });
-  splashWin.once('ready-to-show', () => { if (splashWin && !splashWin.isDestroyed()) splashWin.show(); });
-  // A renderer that never reaches ready-to-show must not strand an always-on-top
-  // window over everything else on the desktop.
-  setTimeout(closeSplash, 10000);
+  splashWin.once('ready-to-show', () => {
+    if (!splashWin || splashWin.isDestroyed()) return;
+    splashWin.show();
+    splashShownAt = Date.now();
+  });
+  // A renderer that never reaches ready-to-show must not strand a window that
+  // sits above everything else on the desktop.
+  setTimeout(() => closeSplash(true), SPLASH_MIN_MS + 8000);
 }
-function closeSplash() {
+
+// The main window is ready long before the hold expires, so it is revealed
+// behind the splash and this only decides when the cover comes off.
+function closeSplash(force) {
   if (!splashWin) return;
+  const waited = splashShownAt ? Date.now() - splashShownAt : SPLASH_MIN_MS;
+  if (!force && waited < SPLASH_MIN_MS) {
+    if (!splashTimer) splashTimer = setTimeout(() => { splashTimer = null; closeSplash(true); }, SPLASH_MIN_MS - waited);
+    return;
+  }
   const w = splashWin;
   splashWin = null;               // cleared first: closing is idempotent, and every
+  if (splashTimer) { clearTimeout(splashTimer); splashTimer = null; }
   if (!w.isDestroyed()) w.close(); // window's ready-to-show calls in here.
 }
 
@@ -582,6 +614,7 @@ function span() {
 // racing the same saved-layout storage is what wiped windows). Focus the existing one.
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) {
+  console.log(`DiscoVibe is already running on ${app.getPath('userData')}; focusing that window instead.`);
   app.quit();
 } else {
   app.on('second-instance', () => {

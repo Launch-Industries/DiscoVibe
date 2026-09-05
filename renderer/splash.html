@@ -19,15 +19,15 @@
 
   html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
 
+  /* Full screen: no rounded corners or edge, and everything below scales with
+     the viewport so it reads the same on a laptop and a 32" display. */
   #splash {
     position: relative;
     width: 100vw; height: 100vh;
-    border-radius: 12px;
     overflow: hidden;
     /* --chrome-bg from the main window, so the handoff has no colour step. */
     background: #04050f;
     font-family: "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
-    box-shadow: inset 0 0 0 1px rgba(136,144,184,.14);
   }
 
   /* Doug is drawn on a flat black field. Screen blending drops that black to the
@@ -35,7 +35,7 @@
   #art {
     position: absolute; inset: 0;
     width: 100%; height: 100%;
-    object-fit: cover; object-position: 64% 42%;
+    object-fit: cover; object-position: 62% 45%;
     mix-blend-mode: screen;
   }
   #scrim {
@@ -43,27 +43,39 @@
     background: linear-gradient(100deg, #04050f 26%, rgba(4,5,15,.88) 44%, rgba(4,5,15,0) 70%);
   }
 
-  #copy { position: absolute; left: 38px; top: 72px; display: flex; flex-direction: column; gap: 13px; max-width: 250px; }
-  #rule { display: flex; gap: 5px; }
-  #rule span { width: 26px; height: 5px; border-radius: 3px; }
+  #copy {
+    position: absolute;
+    left: clamp(40px, 6vw, 150px);
+    top: 50%; transform: translateY(-50%);
+    display: flex; flex-direction: column;
+    gap: clamp(14px, 1.6vh, 30px);
+    max-width: 46vw;
+  }
+  #rule { display: flex; gap: clamp(5px, .5vw, 10px); }
+  #rule span { width: clamp(30px, 3.4vw, 72px); height: clamp(5px, .55vh, 11px); border-radius: 4px; }
 
   #mark {
     font-family: "PP Formula Condensed", "Instrument Sans", system-ui, sans-serif;
     font-weight: 900;
-    font-size: 52px;
-    line-height: .96;
+    font-size: clamp(56px, 8.4vw, 190px);
+    line-height: .94;
     letter-spacing: .2px;
     color: #ffffff;
   }
-  #tag { font-size: 13px; line-height: 1.45; color: #8890b8; }
+  #tag { font-size: clamp(14px, 1.5vw, 32px); line-height: 1.4; color: #8890b8; }
 
-  #foot { position: absolute; left: 38px; bottom: 40px; display: flex; flex-direction: column; gap: 12px; }
-  #track { width: 148px; height: 3px; border-radius: 3px; background: rgba(136,144,184,.22); overflow: hidden; }
+  #foot {
+    position: absolute;
+    left: clamp(40px, 6vw, 150px);
+    bottom: clamp(40px, 6vh, 96px);
+    display: flex; flex-direction: column; gap: clamp(12px, 1.4vh, 22px);
+  }
+  #track { width: clamp(148px, 15vw, 320px); height: clamp(3px, .35vh, 6px); border-radius: 4px; background: rgba(136,144,184,.22); overflow: hidden; }
   #bar { width: 24%; height: 100%; border-radius: 3px; background: #51D9DD; animation: sweep 1.6s ease-in-out infinite; }
   @keyframes sweep { 0% { transform: translateX(-100%); } 100% { transform: translateX(420%); } }
-  #org { display: flex; align-items: baseline; gap: 8px; }
-  #org b { font-size: 11px; font-weight: 600; letter-spacing: .8px; text-transform: uppercase; color: #dde2f2; }
-  #org span { font-size: 11px; color: #4f5763; }
+  #org { display: flex; align-items: baseline; gap: clamp(8px, .8vw, 16px); }
+  #org b { font-size: clamp(11px, 1.05vw, 20px); font-weight: 600; letter-spacing: .9px; text-transform: uppercase; color: #dde2f2; }
+  #org span { font-size: clamp(11px, 1.05vw, 20px); color: #4f5763; }
 
   @media (prefers-reduced-motion: reduce) { #bar { animation: none; width: 100%; } }
 </style>
