@@ -49,7 +49,6 @@ Launch from Spotlight / Launchpad. If macOS blocks it (unsigned build), right-cl
 - **Usage bar** — live Claude token usage in the toolbar (configurable shell command)
 
 ### Setup
-- **First-launch toolkit wizard** — detect what's installed (Homebrew, Node, Claude Code, Codex, Aider, Gemini, Vercel, Supabase, pnpm, Bun, Railway, Stripe, GitHub CLI, ripgrep, jq, Python, fnm, Xcode tools) and install what's missing, re-runnable anytime from Preferences
 - **Projects folder** — pick your root folder on first launch; new terminals open there automatically
 
 ### Keyboard shortcuts

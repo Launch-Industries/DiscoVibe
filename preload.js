@@ -31,7 +31,7 @@ contextBridge.exposeInMainWorld('api', {
   pickFile: () => ipcRenderer.invoke('pick-file'),
   pickFolder: () => ipcRenderer.invoke('pick-folder'),
 
-  // Usage bar + toolkit install detection
+  // Usage bar
   runUsage: (command) => ipcRenderer.invoke('run-usage', { command }),
 
   // Displays / multi-window

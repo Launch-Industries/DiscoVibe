@@ -1,6 +1,6 @@
 'use strict';
 
-/* global Terminal, FitAddon, WebLinksAddon */
+/* global Terminal, FitAddon, WebLinksAddon, WebglAddon */
 
 // ===========================================================================
 // State
@@ -13,7 +13,7 @@ let soundMuted = false;
 let alertsEnabled = true;   // master switch for flash + chime alerts
 let themeMode = 'dark';
 let globalTitleSize = 20;   // shared across ALL panes and windows
-let globalFontSize = 13;    // terminal text size — global
+let globalFontSize = 15;    // terminal text size — global
 let globalFontFamily = '';  // set after FONTS defined (DEFAULT_FONT)
 let globalTitleCenter = false;
 
@@ -29,6 +29,7 @@ const settings = {
   tabSwitch: false,          // plain Tab/Shift+Tab switches panes
   disco: false,              // extra disco flair (rainbow frame, spinning ball)
   clickToMove: true,         // click in a pane to position the shell cursor
+  copyOnSelect: true,        // finishing a selection copies it to the clipboard
   autoName: true,            // AI-name terminals from their recent activity
   usageEnabled: true,        // show a usage bar from a polled command
   usageCommand: CLAUDE_USAGE_CMD,
@@ -78,7 +79,7 @@ const DEFAULT_FONT = FONTS[0].css;
 globalFontFamily = DEFAULT_FONT;
 
 const DARK_PALETTE = [
-  '#10131a', '#13303f', '#102a22', '#3a1f2b', '#2a2150', '#3a2e10', '#10222b', '#301630'
+  '#0b0033', '#1a0a4a', '#2d1b69', '#4a148c', '#6a1b9a', '#0d1b3e', '#311b92', '#120024'
 ];
 const LIGHT_PALETTE = [
   '#f5f7fb', '#e3eefc', '#e6f7f1', '#fcebf0', '#efeafc', '#fbf3e0', '#e8f5ec', '#f7e9f7'
@@ -89,31 +90,14 @@ const PRESET_COLORS = [
   '#f5f7fb', '#e3eefc', '#e6f7f1', '#fcebf0', '#fff3bf', '#d3f9d8', '#ffd8a8', '#e5dbff'
 ];
 
-// Tile color themes — new terminals draw their background from the active theme.
+// Two schemes only: Dark and Light. Per-terminal colors are set in the
+// pane color chooser (preset swatches + custom picker), not here.
 const TILE_THEMES = {
-  'Galaxy':            ['#0b0033', '#1a0a4a', '#2d1b69', '#4a148c', '#6a1b9a', '#0d1b3e', '#311b92', '#120024'],
-  'Pacific Northwest': ['#1b3a2b', '#22372f', '#2f4f4f', '#34495e', '#3d5a4a', '#4b5d52', '#26343a', '#1f2d2a'],
-  'Desert':            ['#7a4a2b', '#a86a3d', '#c98a5a', '#8a6d3b', '#b5894e', '#9c5b3b', '#6b4226', '#d2a679'],
-  'Iceland':           ['#1a2a33', '#2c4a5a', '#3a6b7a', '#5a7a7a', '#0f1f26', '#4a6b6b', '#2e4a4a', '#dfe9ec'],
-  'Ocean':             ['#012d4a', '#01497c', '#02639b', '#0a7fa8', '#013a63', '#155e75', '#0e4d64', '#003049'],
-  'Sunlight':          ['#b5890a', '#d4a017', '#e8b923', '#f0c75e', '#caa42f', '#a87b00', '#dcae1d', '#9c7a10'],
-  'Aurora Borealis':   ['#04150f', '#0a2e1f', '#103a2e', '#1b5e4a', '#2a7d6a', '#1a4a5a', '#2e2a5a', '#0d1b3e'],
-  // Pride & heritage flags
-  'LGBTQ Pride':       ['#e40303', '#ff8c00', '#ffed00', '#008026', '#004dff', '#750787', '#e40303', '#008026'],
-  'Trans Pride':       ['#5bcefa', '#f5a9b8', '#ffffff', '#5bcefa', '#f5a9b8', '#ffffff', '#5bcefa', '#f5a9b8'],
-  'Black Pride':       ['#000000', '#a4161a', '#0a6e3a', '#000000', '#a4161a', '#0a6e3a', '#000000', '#a4161a'],
-  'Colombian':         ['#fcd116', '#003893', '#ce1126', '#fcd116', '#003893', '#ce1126', '#fcd116', '#003893'],
-  'Nigerian':          ['#008751', '#ffffff', '#008751', '#ffffff', '#008751', '#ffffff', '#008751', '#ffffff'],
-  'Mexican':           ['#006847', '#ffffff', '#ce1126', '#006847', '#ffffff', '#ce1126', '#006847', '#ce1126'],
-  'Philippine':        ['#0038a8', '#ce1126', '#ffffff', '#fcd116', '#0038a8', '#ce1126', '#ffffff', '#fcd116'],
-  'Canadian':          ['#d80621', '#ffffff', '#d80621', '#ffffff', '#d80621', '#ffffff', '#d80621', '#ffffff']
+  'Dark':  DARK_PALETTE,
+  'Light': LIGHT_PALETTE
 };
 const THEME_ACCENTS = {
-  'Galaxy': '#b86bd8', 'Pacific Northwest': '#3fb6a8', 'Desert': '#e0a060',
-  'Iceland': '#7ec8e3', 'Ocean': '#00b4d8', 'Sunlight': '#FFD100', 'Aurora Borealis': '#5cf0c0',
-  'LGBTQ Pride': '#cc44cc', 'Trans Pride': '#5bcefa', 'Black Pride': '#e31b23',
-  'Colombian': '#fcd116', 'Nigerian': '#008751', 'Mexican': '#006847',
-  'Philippine': '#0038a8', 'Canadian': '#d80621'
+  'Dark': '#5b9dff', 'Light': '#2f6fe0'
 };
 let tileTheme = '';   // '' = Auto (match dark/light mode)
 function activePalette() {
@@ -196,14 +180,30 @@ function enforceContrast(bg) {
 }
 // Ensure an ANSI color stays legible on a given background (e.g. green text on a
 // green flag tile): if its contrast is too low, blend it toward the foreground.
+const MIN_TEXT_CONTRAST = 4.5;   // WCAG AA for body text
 function legibleOn(hex, bgL, fg) {
-  if (contrast(luminance(hex), bgL) >= 3) return hex;
-  for (let t = 0.35; t < 1; t += 0.2) {
+  if (contrast(luminance(hex), bgL) >= MIN_TEXT_CONTRAST) return hex;
+  for (let t = 0.15; t < 1; t += 0.1) {
     const m = mixHex(hex, fg, t);
-    if (contrast(luminance(m), bgL) >= 3) return m;
+    if (contrast(luminance(m), bgL) >= MIN_TEXT_CONTRAST) return m;
   }
   return fg;
 }
+
+// The xterm 256-color palette (indices 16-255): a 6x6x6 cube then 24 greys.
+// Programs that emit 256-color SGR codes bypass the 16 named ANSI slots, so we
+// remap this range too or half the output ignores the contrast rule.
+const XTERM_256_BASE = (() => {
+  const h = (n) => n.toString(16).padStart(2, '0');
+  const out = [];
+  const levels = [0, 95, 135, 175, 215, 255];
+  for (let r = 0; r < 6; r++)
+    for (let g = 0; g < 6; g++)
+      for (let b = 0; b < 6; b++)
+        out.push(`#${h(levels[r])}${h(levels[g])}${h(levels[b])}`);
+  for (let i = 0; i < 24; i++) { const v = 8 + i * 10; out.push(`#${h(v)}${h(v)}${h(v)}`); }
+  return out;   // 240 entries, index 0 => color 16
+})();
 
 // ===========================================================================
 // Attention bell
@@ -264,13 +264,31 @@ function clearAttention(pane) {
 // ===========================================================================
 function rowCountsFor(n) {
   if (n <= 0) return [];
-  if (n <= 4) return [n];
+  if (n <= 3) return [n];
+  if (n === 4) return [2, 2];   // 2x2 grid, not four vertical strips
   let rows;
   if (n <= 6) rows = 2; else if (n <= 9) rows = 3; else rows = Math.ceil(Math.sqrt(n));
   const base = Math.floor(n / rows), extra = n % rows, counts = [];
   for (let r = 0; r < rows; r++) counts.push(base + (r < extra ? 1 : 0));
   return counts;
 }
+// GPU rendering. Browsers cap how many WebGL contexts can be live at once and we
+// allow up to 30 panes, so a context can be lost at any time: drop the addon and
+// let xterm fall back to its DOM renderer rather than leaving a dead pane.
+function attachWebgl(term) {
+  if (!window.WebglAddon || !window.WebGL2RenderingContext) return null;
+  let addon;
+  try { addon = new WebglAddon.WebglAddon(); } catch (_) { return null; }
+  try {
+    addon.onContextLoss(() => { try { addon.dispose(); } catch (_) {} });
+    term.loadAddon(addon);
+  } catch (_) {
+    try { addon.dispose(); } catch (_) {}
+    return null;
+  }
+  return addon;
+}
+
 function relayout() {
   gridEl.querySelectorAll('.grid-row, .empty-hint').forEach((el) => el.remove());
   if (panes.length === 0) {
@@ -339,7 +357,8 @@ function applyColor(pane, color) {
   pane.term.options.theme = {
     background: color, foreground: fg, cursor: fg, cursorAccent: color,
     selectionBackground: fg === '#ffffff' ? 'rgba(255,255,255,0.3)' : 'rgba(0,0,0,0.25)',
-    ...ansi
+    ...ansi,
+    extendedAnsi: XTERM_256_BASE.map((c) => legibleOn(c, bgL, fg))
   };
   pane.bodyEl.style.background = color;
 }
@@ -416,9 +435,10 @@ function createPane(opts = {}) {
   const fitAddon = new FitAddon.FitAddon();
   term.loadAddon(fitAddon);
   term.open(termLayer);
+  const webgl = attachWebgl(term);   // GPU rendering, DOM fallback
 
   const pane = {
-    id, name, color, term, fitAddon,
+    id, name, color, term, fitAddon, webgl,
     el: node, headerEl, bodyEl, termLayer, nameInput, colorInput, swatchBtn,
     webview, webUrlInput, webMode: false, webUrl: opts.webUrl || '',
     bellOn: opts.bellOn !== false,
@@ -481,6 +501,28 @@ function createPane(opts = {}) {
     const dCol = tx - cx;
     if (!dCol) return;
     window.api.input(id, (dCol > 0 ? '\x1b[C' : '\x1b[D').repeat(Math.abs(dCol)));
+  });
+
+  // Copy-on-select: the selection reaches the clipboard the moment you finish the
+  // drag, so releasing the mouse or clicking away can't lose it.
+  term.onSelectionChange(() => {
+    if (settings.copyOnSelect === false) return;
+    const text = term.getSelection();
+    if (text && text.trim()) navigator.clipboard.writeText(text).catch(() => {});
+  });
+
+  // If a drag gets swallowed by the program's mouse reporting, say so once per
+  // pane rather than leaving the person to guess why nothing highlighted.
+  let selectHintShown = false, dragStartX = 0, dragStartY = 0;
+  termLayer.addEventListener('mousedown', (ev) => { dragStartX = ev.clientX; dragStartY = ev.clientY; });
+  termLayer.addEventListener('mouseup', (ev) => {
+    if (selectHintShown || ev.altKey) return;
+    if (term.hasSelection && term.hasSelection()) return;
+    const tracking = term.modes && term.modes.mouseTrackingMode;
+    if (!tracking || tracking === 'none') return;
+    if (Math.abs(ev.clientX - dragStartX) < 12 && Math.abs(ev.clientY - dragStartY) < 12) return;
+    selectHintShown = true;
+    flashMsg('Hold ⌥ Option to select text while this program is using the mouse');
   });
 
   // Drag & drop files from Finder → insert their shell-escaped paths at the cursor.
@@ -888,11 +930,31 @@ function openNotePopover(pane, anchor) {
   ta.placeholder = 'e.g. Fixing the checkout bug on the storefront repo…';
   ta.rows = 4;
   ta.style.cssText = 'width:240px;max-width:70vw;resize:vertical;background:var(--btn-bg);color:inherit;border:1px solid var(--pop-line);border-radius:8px;padding:8px;font:inherit;font-size:13px';
-  ta.addEventListener('input', () => { pane.note = ta.value; pane.noteBtn.classList.toggle('has-note', !!pane.note.trim()); scheduleSave(); });
   c.appendChild(ta);
   const note = document.createElement('div'); note.className = 'layout-empty';
-  note.textContent = 'Saved with this window and restored when DiscoVibe reopens.';
+  const IDLE = 'Saved with this window and restored when DiscoVibe reopens.';
+  note.textContent = IDLE;
   c.appendChild(note);
+
+  let revert;
+  const status = (text, color) => {
+    clearTimeout(revert);
+    note.textContent = text;
+    note.style.color = color || '';
+  };
+  ta.addEventListener('input', () => {
+    pane.note = ta.value;
+    pane.noteBtn.classList.toggle('has-note', !!pane.note.trim());
+    status('Saving…');
+    scheduleSave();
+  });
+  // Confirm against the real write, not a guess at when it lands.
+  const stop = onSessionSaved((ok) => {
+    if (!c.isConnected) { stop(); return; }
+    status(ok ? '✓ Saved' : '✕ Not saved — storage is full', ok ? '#7bd88f' : '#ff8787');
+    revert = setTimeout(() => status(IDLE), 2000);
+  });
+
   openPopover(anchor, c);
   setTimeout(() => ta.focus(), 30);
 }
@@ -1156,6 +1218,7 @@ function openPreferences() {
     () => { settings.autoCollapseMin = Math.max(1, settings.autoCollapseMin - 5); settingsChanged(); },
     () => { settings.autoCollapseMin = Math.min(600, settings.autoCollapseMin + 5); settingsChanged(); }));
   card.appendChild(checkRow('Click to place cursor', () => settings.clickToMove, (v) => { settings.clickToMove = v; settingsChanged(); }));
+  card.appendChild(checkRow('Copy on select', () => settings.copyOnSelect !== false, (v) => { settings.copyOnSelect = v; settingsChanged(); }));
   card.appendChild(checkRow('Switch panes with Tab (off = shell completion)', () => settings.tabSwitch, (v) => { settings.tabSwitch = v; settingsChanged(); }));
   card.appendChild(checkRow('Auto-name terminals from activity (AI)', () => settings.autoName, (v) => { settings.autoName = v; settingsChanged(); }));
   card.appendChild(checkRow('Set window name from terminal title', () => settings.nameFromTitle, (v) => { settings.nameFromTitle = v; settingsChanged(); }));
@@ -1188,12 +1251,9 @@ function openPreferences() {
   card.appendChild(vNote);
 
   const actions = document.createElement('div'); actions.className = 'ob-actions';
-  const toolkit = document.createElement('button'); toolkit.className = 'pop-custom';
-  toolkit.innerHTML = lic('wrench') + '<span>Set up toolkit…</span>';
-  toolkit.addEventListener('click', () => { ov.remove(); openOnboarding(); });
-  const done = document.createElement('button'); done.className = 'pop-custom'; done.style.flex = '0 0 auto'; done.textContent = 'Done';
+  const done = document.createElement('button'); done.className = 'pop-custom'; done.style.flex = '0 0 auto'; done.style.marginLeft = 'auto'; done.textContent = 'Done';
   done.addEventListener('click', () => ov.remove());
-  actions.append(toolkit, done); card.appendChild(actions);
+  actions.append(done); card.appendChild(actions);
 
   // Open external links (Groq, Qwen, etc.) in the system browser
   card.addEventListener('click', (e) => {
@@ -1336,7 +1396,7 @@ function openTilePicker(anchor) {
 }
 function activePaletteForMode() { return themeMode === 'light' ? LIGHT_PALETTE : DARK_PALETTE; }
 function setTileTheme(name, fromRemote) {
-  tileTheme = name || '';
+  tileTheme = (name && TILE_THEMES[name]) ? name : '';
   const btn = document.getElementById('btn-tiles');
   setBtnIcon(btn, 'palette', tileTheme || 'Tiles');
   applyThemeBorder();
@@ -1352,6 +1412,7 @@ function reskinAll(name) {
 }
 // User picked a theme: set it AND reskin current terminals (and other windows).
 function applyTileTheme(name) {
+  if (name === 'Dark' || name === 'Light') applyThemeMode(name.toLowerCase());
   setTileTheme(name);
   if (name) { reskinAll(name); window.api.broadcast({ type: 'reskin', value: name }); }
 }
@@ -1704,13 +1765,6 @@ const REMOTE_TOOLS_KEY = 'discovibe.remote-tools.v1';
 
 function applyRemoteTools(data) {
   if (!data || typeof data !== 'object') return;
-  // Patch INSTALL_TOOLS entries
-  if (data.tools && typeof data.tools === 'object') {
-    for (const [id, patch] of Object.entries(data.tools)) {
-      const t = INSTALL_TOOLS.find((x) => x.id === id);
-      if (t) Object.assign(t, patch);
-    }
-  }
   // Patch AI_COMMAND_GROUPS entries
   if (data.command_groups && typeof data.command_groups === 'object') {
     for (const [id, patch] of Object.entries(data.command_groups)) {
@@ -1881,13 +1935,17 @@ function saveGlobals() {
   try { localStorage.setItem(GLOBALS_KEY, JSON.stringify({ themeMode, globalTitleSize, globalFontSize, globalFontFamily, globalTitleCenter, soundMuted, settings, tileTheme, voiceAI })); } catch (_) {}
 }
 let saveTimer = null;
+const sessionSaveListeners = new Set();
+function onSessionSaved(fn) { sessionSaveListeners.add(fn); return () => sessionSaveListeners.delete(fn); }
 function writeSession() {
+  let ok = true;
   try {
     const data = serializePanes();
     localStorage.setItem(SESSION_KEY, JSON.stringify({ panes: data }));
     // Keep a backup of the last NON-EMPTY layout so an empty/failed state can't erase it.
     if (data.length) localStorage.setItem(SESSION_KEY + ':bak', JSON.stringify({ panes: data }));
-  } catch (_) {}
+  } catch (_) { ok = false; }
+  sessionSaveListeners.forEach((fn) => { try { fn(ok); } catch (_) {} });
 }
 function scheduleSave() {
   clearTimeout(saveTimer);
@@ -2087,7 +2145,6 @@ themeBtn.addEventListener('click', () => applyThemeMode(themeMode === 'light' ? 
 muteBtn.addEventListener('click', () => setMute(!soundMuted));
 document.getElementById('btn-layouts').addEventListener('click', (e) => openLayouts(e.currentTarget));
 document.getElementById('btn-settings').addEventListener('click', (e) => openGlobalSettings(e.currentTarget));
-document.getElementById('btn-toolkit').addEventListener('click', () => openOnboarding());
 document.getElementById('btn-feedback').addEventListener('click', () => openFeedback());
 document.getElementById('btn-span').addEventListener('click', async () => { await window.api.spanDisplays(); updateDisplayReadout(); });
 
@@ -2224,119 +2281,6 @@ async function pollUsage(force) {
 setInterval(() => pollUsage(false), 5000);
 
 // ===========================================================================
-// First-launch installer wizard
-// ===========================================================================
-const ONBOARD_KEY = 'tileterm.onboarded.v1';
-const INSTALL_TOOLS = [
-  // Each tool: a detection probe (check), the suggested install command (cmd), and the
-  // official install/docs page (url). The toolkit shows status and lets you run the
-  // command in your real terminal or open the guide — it does NOT auto-run installers
-  // (those need an interactive shell / sudo / a TTY, which a background process can't give).
-  // ── Core ──────────────────────────────────────────────────────────────────
-  { id: 'brew',     name: 'Homebrew',           desc: 'Package manager — install everything else',      check: 'command -v brew',       cmd: '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"', url: 'https://brew.sh' },
-  { id: 'clt',      name: 'Xcode CLI Tools',    desc: 'Compilers Homebrew needs',                       check: 'xcode-select -p',       cmd: 'xcode-select --install', url: 'https://mac.install.guide/commandlinetools/' },
-  { id: 'git',      name: 'Git',                desc: 'Version control',                                check: 'command -v git',         cmd: 'brew install git', url: 'https://git-scm.com/download/mac' },
-  { id: 'node',     name: 'Node.js',            desc: 'JS runtime + npm',                               check: 'command -v node',        cmd: 'brew install node', url: 'https://nodejs.org/en/download' },
-  { id: 'fnm',      name: 'fnm',                desc: 'Fast Node version manager',                      check: 'command -v fnm',         cmd: 'brew install fnm', url: 'https://github.com/Schniz/fnm#installation' },
-  // ── AI coding agents ─────────────────────────────────────────────────────
-  { id: 'claude',   name: 'Claude Code',        desc: "Anthropic's coding agent CLI",                   check: 'command -v claude',      cmd: 'npm install -g @anthropic-ai/claude-code', url: 'https://docs.anthropic.com/en/docs/claude-code/setup' },
-  { id: 'codex',    name: 'Codex CLI',          desc: "OpenAI's coding agent CLI",                      check: 'command -v codex',       cmd: 'npm install -g @openai/codex', url: 'https://github.com/openai/codex' },
-  { id: 'aider',    name: 'Aider',              desc: 'Open-source AI coding assistant',                check: 'command -v aider',       cmd: 'brew install aider', url: 'https://aider.chat/docs/install.html' },
-  { id: 'gemini',   name: 'Gemini CLI',         desc: "Google's Gemini CLI",                            check: 'command -v gemini',      cmd: 'npm install -g @google/gemini-cli', url: 'https://github.com/google-gemini/gemini-cli' },
-  { id: 'kiro',     name: 'Kiro CLI',           desc: "Amazon's Kiro agentic IDE CLI",                  check: 'command -v kiro-cli',    cmd: 'brew install --cask kiro-cli', url: 'https://kiro.dev' },
-  // ── Package managers ─────────────────────────────────────────────────────
-  { id: 'pnpm',     name: 'pnpm',               desc: 'Fast, disk-efficient package manager',           check: 'command -v pnpm',        cmd: 'npm install -g pnpm', url: 'https://pnpm.io/installation' },
-  { id: 'bun',      name: 'Bun',                desc: 'Ultra-fast JS runtime & package manager',        check: 'command -v bun',         cmd: 'curl -fsSL https://bun.sh/install | bash', url: 'https://bun.sh/docs/installation' },
-  // ── Deploy / cloud ───────────────────────────────────────────────────────
-  { id: 'vercel',   name: 'Vercel CLI',         desc: 'Deploy to Vercel from the terminal',             check: 'command -v vercel',      cmd: 'npm install -g vercel', url: 'https://vercel.com/docs/cli' },
-  { id: 'supabase', name: 'Supabase CLI',       desc: 'Local Supabase dev + deployments',               check: 'command -v supabase',    cmd: 'brew install supabase/tap/supabase', url: 'https://supabase.com/docs/guides/local-development/cli/getting-started' },
-  { id: 'railway',  name: 'Railway CLI',        desc: 'Deploy to Railway from the terminal',            check: 'command -v railway',     cmd: 'npm install -g @railway/cli', url: 'https://docs.railway.com/guides/cli' },
-  { id: 'stripe',   name: 'Stripe CLI',         desc: 'Test Stripe webhooks locally',                   check: 'command -v stripe',      cmd: 'brew install stripe/stripe-cli/stripe', url: 'https://docs.stripe.com/stripe-cli' },
-  // ── Dev utilities ────────────────────────────────────────────────────────
-  { id: 'gh',       name: 'GitHub CLI',         desc: 'gh — GitHub from the terminal',                  check: 'command -v gh',          cmd: 'brew install gh', url: 'https://cli.github.com/' },
-  { id: 'rg',       name: 'ripgrep',            desc: 'Lightning-fast code search (rg)',                check: 'command -v rg',          cmd: 'brew install ripgrep', url: 'https://github.com/BurntSushi/ripgrep#installation' },
-  { id: 'jq',       name: 'jq',                 desc: 'JSON processor — great for API work',            check: 'command -v jq',          cmd: 'brew install jq', url: 'https://jqlang.github.io/jq/download/' },
-  { id: 'python',   name: 'Python 3',           desc: 'Python runtime + pip',                           check: 'command -v python3',     cmd: 'brew install python', url: 'https://www.python.org/downloads/macos/' },
-];
-
-function openOnboarding() {
-  const ov = document.createElement('div'); ov.id = 'onboard';
-  ov.innerHTML = `
-    <div class="ob-card">
-      <div class="ob-head"><i data-lucide="disc-3"></i> Welcome to DiscoVibe — set up your toolkit</div>
-      <div class="ob-sub">Pick your projects folder, then set up the tools you want for vibe-coding. Each row shows whether it's already installed — hit <b>Run</b> to drop the install command into your terminal, or open the official <b>Guide</b>.</div>
-      <div class="ob-folder">
-        <div class="ob-fold-label"><i data-lucide="folder-open"></i> Where are your projects?</div>
-        <div class="ob-fold-row">
-          <span class="ob-fold-path"></span>
-          <button class="ob-fold-btn pop-custom">Browse…</button>
-        </div>
-        <div class="ob-fold-note">New terminals open here automatically.</div>
-      </div>
-      <div class="ob-startnote"><i data-lucide="info"></i> New Mac? Install <b>Xcode Command Line Tools</b> and <b>Homebrew</b> first — Git, Node and most others install through Homebrew (npm tools need Node).</div>
-      <div class="ob-list"></div>
-      <div class="ob-actions">
-        <button class="ob-skip">Close</button>
-        <button class="ob-done pop-custom" style="flex:0 0 auto">Done</button>
-      </div>
-    </div>`;
-  document.body.appendChild(ov);
-
-  // Project folder picker
-  const pathEl = ov.querySelector('.ob-fold-path');
-  pathEl.textContent = settings.projectsDir || '~ (home — click Browse to set a folder)';
-  ov.querySelector('.ob-fold-btn').addEventListener('click', async () => {
-    const r = await window.api.pickFolder();
-    if (r && r.ok) { settings.projectsDir = r.path; saveGlobals(); pathEl.textContent = r.path; }
-  });
-
-  const finish = () => { localStorage.setItem(ONBOARD_KEY, '1'); ov.remove(); };
-  ov.querySelector('.ob-skip').addEventListener('click', finish);
-  ov.querySelector('.ob-done').addEventListener('click', finish);
-
-  // Drop a command into the focused terminal (real interactive shell — sudo/TTY work
-  // there, unlike a background process), copy it as a fallback, and close so it's visible.
-  const runInTerminal = (cmd) => {
-    const pane = panes.find((p) => p.id === focusedId) || panes[0];
-    if (pane) { window.api.input(pane.id, cmd + '\n'); pane.term.focus(); }
-    try { navigator.clipboard.writeText(cmd); } catch (_) {}
-    pushClip(cmd);
-    finish();
-  };
-
-  const list = ov.querySelector('.ob-list');
-  INSTALL_TOOLS.forEach((t) => {
-    const row = document.createElement('div'); row.className = 'ob-row';
-    const status = document.createElement('span'); status.className = 'ob-status'; status.dataset.id = t.id;
-    status.textContent = '…'; status.style.color = 'var(--readout)';
-    const txt = document.createElement('div'); txt.className = 'ob-txt';
-    txt.innerHTML = `<b>${t.name}</b><span>${t.desc}</span>`;
-    const actions = document.createElement('div'); actions.className = 'ob-row-actions';
-    const run = document.createElement('button'); run.className = 'ob-act'; run.title = `Run in terminal:  ${t.cmd}`;
-    run.innerHTML = lic('play') + '<span>Run</span>';
-    run.addEventListener('click', () => runInTerminal(t.cmd));
-    const guide = document.createElement('button'); guide.className = 'ob-act ob-act-ghost'; guide.title = t.url;
-    guide.innerHTML = lic('external-link') + '<span>Guide</span>';
-    guide.addEventListener('click', () => { if (t.url) window.api.openExternal(t.url); });
-    actions.append(run, guide);
-    row.append(status, txt, actions);
-    list.appendChild(row);
-  });
-
-  // Detect what's already installed (parallel) — purely informational now.
-  INSTALL_TOOLS.forEach(async (t) => {
-    const statusEl = ov.querySelector(`.ob-status[data-id="${t.id}"]`);
-    try {
-      const r = await window.api.runUsage(t.check);
-      if (r && r.ok) { statusEl.textContent = '✓ installed'; statusEl.style.color = '#7bd88f'; }
-      else { statusEl.textContent = 'not installed'; statusEl.style.color = 'var(--readout)'; }
-    } catch (_) { statusEl.textContent = ''; }
-  });
-
-  renderIcons();
-}
-
-// ===========================================================================
 // Boot
 // ===========================================================================
 (function boot() {
@@ -2371,11 +2315,6 @@ function openOnboarding() {
   updateDisplayReadout();
   pollUsage(true);
   fetchRemoteTools();   // refresh tool/command definitions from GitHub in the background
-
-  // First launch on the primary window → offer to install vibe-coding tools.
-  if (ROLE === 'primary' && !localStorage.getItem(ONBOARD_KEY)) {
-    setTimeout(openOnboarding, 500);
-  }
 })();
 
 // ===========================================================================
