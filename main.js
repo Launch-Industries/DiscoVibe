@@ -473,7 +473,10 @@ function buildMenu() {
         { role: 'cut' },
         { label: 'Copy', accelerator: 'CmdOrCtrl+C', click: () => sendToFocused('copy') },
         { role: 'paste' },
-        { label: 'Select All', accelerator: 'CmdOrCtrl+A', click: () => sendToFocused('select-all') }
+        { label: 'Select All', accelerator: 'CmdOrCtrl+A', click: () => sendToFocused('select-all') },
+        // Cmd+A is the visible screen; the full scrollback is the deliberate,
+        // shifted version, because 10,000 lines is rarely what someone means.
+        { label: 'Select All Including Scrollback', accelerator: 'CmdOrCtrl+Shift+A', click: () => sendToFocused('select-all-scrollback') }
       ]
     },
     {

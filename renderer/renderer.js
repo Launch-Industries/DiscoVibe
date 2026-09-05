@@ -444,6 +444,7 @@ function createPane(opts = {}) {
     bellOn: opts.bellOn !== false,
     note: opts.note || '', manualName: opts.manual !== undefined ? !!opts.manual : !!opts.name, noteBtn,
     collapsed: false, attnTimer: null, chimeCount: 0, lastActivity: Date.now(), lastKeypress: 0,
+    selAnchor: null, selFocus: null,   // keyboard-selection endpoints, absolute buffer coords
     cwd: opts.cwd || settings.projectsDir || '',   // updated by OSC 7 or cd detection
     detectedTool: null,
     aiName: opts.aiName || '',
@@ -514,7 +515,10 @@ function createPane(opts = {}) {
   // If a drag gets swallowed by the program's mouse reporting, say so once per
   // pane rather than leaving the person to guess why nothing highlighted.
   let selectHintShown = false, dragStartX = 0, dragStartY = 0;
-  termLayer.addEventListener('mousedown', (ev) => { dragStartX = ev.clientX; dragStartY = ev.clientY; });
+  termLayer.addEventListener('mousedown', (ev) => {
+    dragStartX = ev.clientX; dragStartY = ev.clientY;
+    if (pane.selAnchor) clearKeyboardSelection(pane);   // the drag owns the selection now
+  });
   termLayer.addEventListener('mouseup', (ev) => {
     if (selectHintShown || ev.altKey) return;
     if (term.hasSelection && term.hasSelection()) return;
@@ -590,6 +594,14 @@ function createPane(opts = {}) {
     // Copy: Cmd+C is owned by the Edit menu item, which calls copyFocusedSelection()
     // in the renderer. Handling it here as well raced the menu and could leave the
     // clipboard holding only the current line.
+
+    // Keyboard selection. xterm ships none: a mouse drag is its only way to select
+    // the buffer, so Shift+Arrow fell through to the hidden one-line helper textarea.
+    // That is why rows appeared to highlight but Cmd+C only ever returned the first
+    // line. Drive a real selection instead, in buffer coordinates.
+    if (handleSelectionKey(pane, e)) return false;
+    // Typing again drops the selection, the way a text field behaves.
+    if (pane.selAnchor && !e.shiftKey && !e.metaKey && !e.ctrlKey) clearKeyboardSelection(pane);
 
     if (e.key !== 'Tab') return true;
     const plain = !e.ctrlKey && !e.altKey && !e.metaKey;
@@ -2175,6 +2187,60 @@ function saveFocusedOutput() {
 // Cmd+C from the Edit menu. Inputs/textareas and normal page text keep the
 // native behaviour; inside a terminal we copy xterm's real selection, which is
 // the whole multi-line block (the native copy only ever saw the current line).
+// ===========================================================================
+// Keyboard selection
+// ===========================================================================
+// Endpoints are absolute buffer rows (scrollback included), matching what
+// term.select() expects. Anchor stays put, focus moves, and the span between
+// them is handed to xterm, which resolves wrapped rows on its own.
+const SELECT_KEYS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End']);
+
+function bufferCursor(term) {
+  const b = term.buffer.active;
+  return { col: b.cursorX, row: b.baseY + b.cursorY };
+}
+function clampPos(term, p) {
+  const maxRow = Math.max(0, term.buffer.active.length - 1);
+  return { row: Math.min(maxRow, Math.max(0, p.row)), col: Math.min(term.cols, Math.max(0, p.col)) };
+}
+function clearKeyboardSelection(pane) {
+  pane.selAnchor = null; pane.selFocus = null;
+  try { pane.term.clearSelection(); } catch (_) {}
+}
+
+function handleSelectionKey(pane, e) {
+  const term = pane.term;
+  // Option is the escape hatch: it passes Shift+Arrow through to programs that
+  // want the raw sequence (vim visual mode, readline word motions).
+  if (!e.shiftKey || e.altKey || !SELECT_KEYS.has(e.key)) return false;
+
+  if (!pane.selAnchor) { pane.selAnchor = bufferCursor(term); pane.selFocus = { ...pane.selAnchor }; }
+  const f = { ...pane.selFocus };
+  const jump = e.metaKey || e.ctrlKey;   // Shift+Cmd+Up/Down reaches the ends
+  if (e.key === 'ArrowLeft') f.col -= 1;
+  else if (e.key === 'ArrowRight') f.col += 1;
+  else if (e.key === 'ArrowUp') f.row = jump ? 0 : f.row - 1;
+  else if (e.key === 'ArrowDown') f.row = jump ? term.buffer.active.length - 1 : f.row + 1;
+  else if (e.key === 'Home') { f.col = 0; if (jump) f.row = 0; }
+  else if (e.key === 'End') { f.col = term.cols; if (jump) f.row = term.buffer.active.length - 1; }
+  // A column step past either edge rolls onto the neighbouring row instead of sticking.
+  if (f.col < 0) { if (f.row > 0) { f.row -= 1; f.col = term.cols - 1; } else f.col = 0; }
+  else if (f.col > term.cols) { f.row += 1; f.col = 0; }
+  pane.selFocus = clampPos(term, f);
+
+  const a = pane.selAnchor.row * term.cols + pane.selAnchor.col;
+  const b = pane.selFocus.row * term.cols + pane.selFocus.col;
+  const len = Math.abs(b - a), from = Math.min(a, b);
+  if (len > 0) term.select(from % term.cols, Math.floor(from / term.cols), len);
+  else term.clearSelection();
+
+  // Follow the moving end so the selection never runs off screen.
+  const view = term.buffer.active.viewportY;
+  if (pane.selFocus.row < view) term.scrollLines(pane.selFocus.row - view);
+  else if (pane.selFocus.row > view + term.rows - 1) term.scrollLines(pane.selFocus.row - (view + term.rows - 1));
+  return true;
+}
+
 function copyFocusedSelection() {
   const el = document.activeElement;
   const isField = el && (el.tagName === 'INPUT' || (el.tagName === 'TEXTAREA' && !el.classList.contains('xterm-helper-textarea')));
@@ -2196,17 +2262,24 @@ function copyFocusedSelection() {
   if (sel.trim()) { navigator.clipboard.writeText(sel).catch(() => {}); pushClip(sel); }
 }
 
-function selectAllFocused() {
+function selectAllFocused(includeScrollback) {
   const el = document.activeElement;
   if (el && (el.tagName === 'INPUT' || (el.tagName === 'TEXTAREA' && !el.classList.contains('xterm-helper-textarea')))) { el.select(); return; }
   const pane = focusedPane();
-  if (pane) pane.term.selectAll();
+  if (!pane) return;
+  clearKeyboardSelection(pane);
+  if (includeScrollback) { pane.term.selectAll(); return; }
+  // Plain Cmd+A takes what is on screen. Selecting all 10,000 scrollback lines is
+  // almost never what someone wants when copying one command's output.
+  const b = pane.term.buffer.active;
+  pane.term.selectLines(b.viewportY, b.viewportY + pane.term.rows - 1);
 }
 
 window.api.onMenu((action) => {
   if (action === 'new-terminal') addPane();
   else if (action === 'copy') copyFocusedSelection();
-  else if (action === 'select-all') selectAllFocused();
+  else if (action === 'select-all') selectAllFocused(false);
+  else if (action === 'select-all-scrollback') selectAllFocused(true);
   else if (action === 'recover-sessions') openRecovery();
   else if (action === 'close-terminal' && focusedId) closePane(focusedId);
   else if (action === 'reopen-closed') reopenClosed();
