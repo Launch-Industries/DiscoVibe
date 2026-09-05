@@ -34,6 +34,10 @@ contextBridge.exposeInMainWorld('api', {
   // Usage bar
   runUsage: (command) => ipcRenderer.invoke('run-usage', { command }),
 
+  // Window naming
+  projectName: (dir) => ipcRenderer.invoke('project-name', { dir }),
+  setWindowTitle: (title) => ipcRenderer.send('set-window-title', { title }),
+
   // Displays / multi-window
   getDisplays: () => ipcRenderer.invoke('get-displays'),
   spanDisplays: () => ipcRenderer.invoke('span-displays'),

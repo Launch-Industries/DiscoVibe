@@ -53,6 +53,38 @@ function windowForDisplay(displayId) {
   return null;
 }
 
+// ---- Project name -----------------------------------------------------------
+// What someone calls "the project" is the folder holding .git, not whichever
+// subdirectory the shell happens to be sitting in: cd into src/components and it
+// is still the same repo. So walk up for .git and name the window after that.
+const projectNameCache = new Map();
+function projectNameFor(dir) {
+  if (!dir) return '';
+  if (projectNameCache.has(dir)) return projectNameCache.get(dir);
+  let name = '';
+  try {
+    const start = path.resolve(dir);
+    const root = path.parse(start).root;
+    let cur = start;
+    // Bounded: a pathological path must not turn every prompt into a long walk.
+    for (let i = 0; i < 40 && cur && cur !== root; i++) {
+      if (fs.existsSync(path.join(cur, '.git'))) { name = path.basename(cur); break; }
+      cur = path.dirname(cur);
+    }
+    // Not a repo: the folder itself is the best answer available. Home is the
+    // exception — it means "not in a project", not a project named after the user.
+    if (!name && start !== os.homedir() && start !== root) name = path.basename(start);
+  } catch (_) {}
+  projectNameCache.set(dir, name);
+  return name;
+}
+ipcMain.handle('project-name', (_e, { dir }) => ({ name: projectNameFor(dir) }));
+
+ipcMain.on('set-window-title', (event, { title }) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (win && !win.isDestroyed()) win.setTitle((title || '').trim() || 'DiscoVibe');
+});
+
 // ---- Splash -----------------------------------------------------------------
 // A frameless 560x360 window on the app's own --chrome-bg, shown while the first
 // renderer boots. Held only as long as that takes: a fixed minimum would make

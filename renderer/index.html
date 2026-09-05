@@ -13,6 +13,11 @@
   <div id="toolbar">
     <div class="tb-left">
       <span class="brand"><i data-lucide="disc-3"></i> <span class="brand-text">DiscoVibe</span></span>
+      <span class="win-name-wrap">
+        <input id="window-name" class="win-name" spellcheck="false" placeholder="Untitled window"
+               title="Window name. Set from the project in the focused pane; type to override." />
+        <button id="btn-win-name-reset" class="win-name-reset" title="Go back to the project name" hidden><i data-lucide="rotate-ccw"></i></button>
+      </span>
       <span id="layout-readout" class="readout">1 pane</span>
       <span id="display-readout" class="readout"><i data-lucide="monitor"></i> 1 display</span>
       <span id="usage-readout" class="usage" hidden><span class="usage-label"></span><span class="usage-bar"><span class="usage-fill"></span></span><span class="usage-text"></span></span>

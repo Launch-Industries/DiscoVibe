@@ -463,6 +463,7 @@ function createPane(opts = {}) {
         if (next && next !== pane.cwd) {
           pane.cwd = next;
           window.api.transcriptMeta(id, { cwd: next });   // so recovery reopens here
+          if (pane.id === focusedId) refreshWindowName();
         }
       } catch (_) {}
       return false;
@@ -777,6 +778,7 @@ function closePane(id, skipRecord) {
 function setFocused(id) {
   focusedId = id;
   for (const p of panes) p.el.classList.toggle('focused', p.id === id);
+  refreshWindowName();
 }
 function cyclePane(dir) {
   if (panes.length < 2) return;
@@ -2166,6 +2168,77 @@ document.getElementById('btn-settings').addEventListener('click', (e) => openGlo
 document.getElementById('btn-feedback').addEventListener('click', () => openFeedback());
 document.getElementById('btn-span').addEventListener('click', async () => { await window.api.spanDisplays(); updateDisplayReadout(); });
 
+// ===========================================================================
+// Window name
+// ===========================================================================
+// A window is named for the project in its focused pane, so Mission Control and
+// the app switcher say which repo each window is rather than four identical
+// "DiscoVibe"s. A typed name wins permanently: auto-naming is here to save the
+// typing, not to overrule someone who has said what they want.
+const WINNAME_KEY = 'tileterm.winname.v1:' + WIN_KEY;
+let windowName = '';
+let windowNameManual = false;
+let lastAutoCwd = null;
+
+// Read at parse time, not from initWindowName(). Restoring panes calls
+// setFocused -> refreshWindowName before boot reaches init, and with the manual
+// flag still false that pass would overwrite a typed name and save over it.
+loadWindowName();
+function loadWindowName() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(WINNAME_KEY) || 'null');
+    if (raw && typeof raw === 'object') { windowName = raw.name || ''; windowNameManual = !!raw.manual; }
+  } catch (_) {}
+}
+function saveWindowName() {
+  try { localStorage.setItem(WINNAME_KEY, JSON.stringify({ name: windowName, manual: windowNameManual })); } catch (_) {}
+}
+function applyWindowName() {
+  const el = document.getElementById('window-name');
+  // Never yank the field out from under someone mid-edit.
+  if (el && document.activeElement !== el) el.value = windowName;
+  const reset = document.getElementById('btn-win-name-reset');
+  if (reset) reset.hidden = !windowNameManual;
+  const title = windowName ? windowName + ' — DiscoVibe' : 'DiscoVibe';
+  document.title = title;
+  try { window.api.setWindowTitle(title); } catch (_) {}
+}
+async function refreshWindowName(force) {
+  if (windowNameManual) { applyWindowName(); return; }
+  const pane = focusedPane();
+  const dir = (pane && pane.cwd) || '';
+  // Every prompt fires OSC 7, so skip the round trip when nothing moved.
+  if (!force && dir === lastAutoCwd) return;
+  lastAutoCwd = dir;
+  let name = '';
+  if (dir) { try { const r = await window.api.projectName(dir); name = (r && r.name) || ''; } catch (_) {} }
+  if (windowNameManual) return;   // they typed one while we were awaiting
+  windowName = name;
+  saveWindowName();
+  applyWindowName();
+}
+function initWindowName() {
+  const el = document.getElementById('window-name');
+  const reset = document.getElementById('btn-win-name-reset');
+  if (!el) return;
+  el.addEventListener('change', () => {
+    const v = el.value.trim();
+    // Clearing the field is how you ask for the project name back.
+    if (!v) { windowNameManual = false; windowName = ''; saveWindowName(); lastAutoCwd = null; refreshWindowName(true); return; }
+    windowName = v; windowNameManual = true; saveWindowName(); applyWindowName();
+  });
+  el.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') el.blur();
+    else if (e.key === 'Escape') { el.value = windowName; el.blur(); }
+  });
+  if (reset) reset.addEventListener('click', () => {
+    windowNameManual = false; windowName = ''; saveWindowName(); lastAutoCwd = null;
+    refreshWindowName(true);
+  });
+  applyWindowName();
+  refreshWindowName(true);
+}
+
 function focusedPane() { return panes.find((p) => p.id === focusedId) || panes[0]; }
 function killAll() {
   if (!confirm('Close ALL terminals (active and stored)? This cannot be undone.')) return;
@@ -2392,6 +2465,7 @@ setInterval(() => pollUsage(false), 5000);
   if (s && Array.isArray(s.panes) && s.panes.length) restoreConfigs(s.panes);
   else addPane();
   updateDisplayReadout();
+  initWindowName();
   pollUsage(true);
   fetchRemoteTools();   // refresh tool/command definitions from GitHub in the background
 })();

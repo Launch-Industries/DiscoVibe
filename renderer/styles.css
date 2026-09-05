@@ -95,6 +95,26 @@ svg.lucide { width: 16px; height: 16px; stroke-width: 2; vertical-align: middle;
 body.disco #app-frame { animation: disco-hue 5s linear infinite; box-shadow: inset 0 0 26px rgba(255,255,255,.05); }
 body.disco .brand i { animation: spin 2.6s linear infinite; }
 body.disco .brand-text { animation-duration: 4s; }
+/* Window name — filled from the focused pane's project, editable to override.
+   Reads as plain text until hovered so the toolbar stays quiet. */
+.win-name-wrap { display: inline-flex; align-items: center; gap: 2px; }
+.win-name {
+  background: transparent; border: 1px solid transparent; border-radius: 6px;
+  color: var(--chrome-fg); font: inherit; font-size: 12.5px; font-weight: 600;
+  padding: 3px 6px; width: 15ch; min-width: 6ch; text-overflow: ellipsis;
+  transition: width .12s ease;
+}
+.win-name::placeholder { color: var(--readout); font-weight: 500; }
+.win-name:hover { border-color: var(--chrome-line); }
+.win-name:focus { outline: none; border-color: var(--accent); background: var(--btn-bg); width: 24ch; }
+.win-name-reset {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; padding: 0; background: transparent; border: 0;
+  border-radius: 5px; color: var(--readout); cursor: pointer;
+}
+.win-name-reset:hover { background: var(--btn-bg-hover); color: var(--chrome-fg); }
+.win-name-reset svg.lucide { width: 12px; height: 12px; }
+
 .readout { font-size: 12px; color: var(--readout); display: inline-flex; align-items: center; gap: 4px; }
 .readout svg.lucide { width: 14px; height: 14px; }
 
