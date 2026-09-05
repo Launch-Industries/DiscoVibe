@@ -8,6 +8,7 @@
   "license": "MIT",
   "scripts": {
     "start": "electron .",
+    "start:dev": "electron . --user-data-dir=/tmp/discovibe-dev",
     "rebuild": "electron-rebuild -f -w node-pty",
     "postinstall": "electron-rebuild -f -w node-pty",
     "pack": "electron-builder --dir",
