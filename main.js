@@ -53,6 +53,34 @@ function windowForDisplay(displayId) {
   return null;
 }
 
+// ---- Splash -----------------------------------------------------------------
+// A frameless 560x360 window on the app's own --chrome-bg, shown while the first
+// renderer boots. Held only as long as that takes: a fixed minimum would make
+// startup feel slower than it is.
+let splashWin = null;
+function createSplash() {
+  splashWin = new BrowserWindow({
+    width: 560, height: 360,
+    frame: false, transparent: true, resizable: false, movable: false,
+    center: true, show: false, skipTaskbar: true, alwaysOnTop: true,
+    backgroundColor: '#00000000',
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true }
+  });
+  splashWin.loadFile(path.join(__dirname, 'renderer', 'splash.html'), {
+    query: { v: app.getVersion() }   // never hardcode the number; it drifts
+  });
+  splashWin.once('ready-to-show', () => { if (splashWin && !splashWin.isDestroyed()) splashWin.show(); });
+  // A renderer that never reaches ready-to-show must not strand an always-on-top
+  // window over everything else on the desktop.
+  setTimeout(closeSplash, 10000);
+}
+function closeSplash() {
+  if (!splashWin) return;
+  const w = splashWin;
+  splashWin = null;               // cleared first: closing is idempotent, and every
+  if (!w.isDestroyed()) w.close(); // window's ready-to-show calls in here.
+}
+
 function createWindow(display, role) {
   display = display || screen.getPrimaryDisplay();
   const wa = display.workArea;
@@ -64,6 +92,7 @@ function createWindow(display, role) {
     height: wa.height,
     title: 'DiscoVibe',
     backgroundColor: '#0b0e14',
+    show: false,   // revealed on ready-to-show; the splash covers the gap
     titleBarStyle: 'hiddenInset', // keeps native traffic lights, gives us the full canvas
     trafficLightPosition: { x: 14, y: 14 },
     webPreferences: {
@@ -82,6 +111,14 @@ function createWindow(display, role) {
     query: { role: win.__role, key: win.__key }
   });
   win.maximize();
+  // Paint-ready is the honest moment to swap: the window has content, so the
+  // splash goes away exactly when it stops being useful, never on a timer.
+  win.once('ready-to-show', () => { win.show(); closeSplash(); });
+  // If that signal never arrives, an invisible window reads as an app that failed
+  // to launch. Show it anyway rather than leave nothing on screen.
+  setTimeout(() => {
+    if (!win.isDestroyed() && !win.isVisible()) { win.show(); closeSplash(); }
+  }, 8000);
   attachDebug(win);
 
   windows.add(win);
@@ -552,6 +589,7 @@ app.whenReady().then(() => {
   });
 
   buildMenu();
+  createSplash();
 
   // Restore the window set from the last session (crash/quit recovery).
   const saved = readWindows();
