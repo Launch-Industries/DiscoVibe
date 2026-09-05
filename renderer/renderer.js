@@ -427,6 +427,12 @@ function createPane(opts = {}) {
     fontSize: globalFontSize,
     lineHeight: 1.1, fontWeight: 500, fontWeightBold: 700,
     cursorBlink: true, allowProposedApi: true, scrollback: 10000, macOptionIsMeta: true,
+    // Last line of defence on legibility. The theme remap below only reaches the 16
+    // named ANSI slots and the 256-colour cube; a program emitting 24-bit RGB (Claude
+    // Code's own UI does) bypasses both and can land dark-on-dark. This is xterm's own
+    // check, and it runs against each cell's real background, so program-set
+    // backgrounds are handled too.
+    minimumContrastRatio: MIN_TEXT_CONTRAST,
     // Option+drag forces a selection even when the running program (Claude Code, vim,
     // less, tmux) has mouse reporting on and would otherwise swallow the drag.
     macOptionClickForcesSelection: true,
