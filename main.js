@@ -312,6 +312,29 @@ function readTranscriptText(base, maxBytes = 4 * 1024 * 1024) {
 }
 
 // Newest-first list of recorded sessions, each with a short tail preview.
+// ---- Claude Code session discovery -----------------------------------------
+// `claude -c` continues the MOST RECENT conversation in a directory, so several
+// panes sharing a cwd all resume the same one. Claude stores each conversation
+// as its own file under ~/.claude/projects/<cwd with non-alphanumerics as ->/,
+// named by session uuid, so a pane can instead resume the exact session it was
+// running via `claude --resume <uuid>`.
+function claudeProjectDir(cwd) {
+  if (!cwd) return null;
+  return path.join(os.homedir(), '.claude', 'projects', String(cwd).replace(/[^A-Za-z0-9]/g, '-'));
+}
+
+ipcMain.handle('claude-sessions', (_e, { cwd } = {}) => {
+  const dir = claudeProjectDir(cwd);
+  if (!dir) return [];
+  let files;
+  try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.jsonl')); } catch (_) { return []; }
+  return files.map((f) => {
+    let mtime = 0;
+    try { mtime = fs.statSync(path.join(dir, f)).mtimeMs; } catch (_) {}
+    return { id: f.slice(0, -6), mtime };
+  }).sort((a, b) => b.mtime - a.mtime);
+});
+
 ipcMain.handle('list-transcripts', () => {
   const dir = transcriptsDir();
   const live = new Set([...transcripts.values()].map((r) => r.meta.base));

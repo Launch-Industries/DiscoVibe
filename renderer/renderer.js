@@ -452,7 +452,11 @@ function createPane(opts = {}) {
     collapsed: false, attnTimer: null, chimeCount: 0, lastActivity: Date.now(), lastKeypress: 0,
     selAnchor: null, selFocus: null,   // keyboard-selection endpoints, absolute buffer coords
     cwd: opts.cwd || settings.projectsDir || '',   // updated by OSC 7 or cd detection
-    detectedTool: null,
+    detectedTool: opts.aiTool || null,
+    // The exact Claude conversation this pane is running. Persisted with the
+    // layout so a crash can resume THIS pane's session rather than whatever
+    // happened to be most recent in the directory.
+    aiSessionId: opts.aiSessionId || '',
     aiName: opts.aiName || '',
   };
   // OSC 7: shell emits \x1b]7;file:///path\x07 after each prompt — track current directory
@@ -1026,12 +1030,56 @@ function detectModel(pane) {
     const ln = buf.getLine(i); if (!ln) continue;
     const s = ln.translateToString(true);
     if (!s.trim()) continue;
-    for (const [re, label] of MODEL_PATTERNS) if (re.test(s)) return label;
+    for (const [re, label] of MODEL_PATTERNS) if (re.test(s)) {
+      // Claude's status line renders as "Opus 5 (1m)": keep the version digit
+      // and the context marker, both of which the bare label drops.
+      // Versions appear as "Opus 5", "Opus 4.1" and "haiku-4-5": accept a space
+      // or hyphen separator, and normalise "4-5" to "4.5".
+      const ver = s.match(new RegExp(label + '[\\s-]*([0-9](?:[0-9.-]*[0-9])?)', 'i'));
+      const ctx = /\(\s*(\d+m)\s*\)/i.exec(s);
+      let out = label + (ver ? ' ' + ver[1].replace(/-/g, '.') : '');
+      if (ctx) out += ' ' + ctx[1].toLowerCase();
+      return out;
+    }
   }
   return '';
 }
+
+// Reasoning / effort level, where a tool actually prints one.
+//
+// Anchored deliberately: a level word must follow the keyword. Transcripts are
+// full of prose like "effort to", "effort levels" and "thinking more", none of
+// which should light up the badge. Only the bottom of the buffer is scanned,
+// since this lives in a status line, not in scrollback.
+const EFFORT_PATTERNS = [
+  [/\breasoning(?:[ _-]?effort)?\s*[:=]\s*(minimal|low|medium|high|xhigh|max)\b/i, (m) => m[1]],
+  [/\beffort\s*[:=]\s*(minimal|low|medium|high|xhigh|max)\b/i, (m) => m[1]],
+  [/\bthinking\s*[:=]\s*(off|none|low|medium|high|max)\b/i, (m) => m[1]],
+  [/\b(ultrathink)\b/i, () => 'ultrathink'],
+  [/\b(megathink)\b/i, () => 'megathink'],
+];
+function detectEffort(pane) {
+  const buf = pane.term.buffer.active;
+  const start = Math.max(0, buf.length - 15);
+  for (let i = buf.length - 1; i >= start; i--) {
+    const ln = buf.getLine(i); if (!ln) continue;
+    const s = ln.translateToString(true);
+    if (!s.trim()) continue;
+    for (const [re, pick] of EFFORT_PATTERNS) {
+      const m = re.exec(s);
+      if (m) return String(pick(m)).toLowerCase();
+    }
+  }
+  return '';
+}
+
 function updateModelBadge(pane) {
-  const label = settings.showModel ? detectModel(pane) : '';
+  let label = '';
+  if (settings.showModel) {
+    const model = detectModel(pane);
+    const effort = model ? detectEffort(pane) : '';
+    label = effort ? `${model} · ${effort}` : model;
+  }
   if (pane._model === label) return;
   pane._model = label;
   pane.modelBadge.textContent = label;
@@ -1099,8 +1147,11 @@ function detectTool(pane) {
   return null;
 }
 
-function buildResumeCmd(tool, cwd) {
+function buildResumeCmd(tool, cwd, sessionId) {
   const cd = cwd ? `cd ${JSON.stringify(cwd)} && ` : '';
+  // `claude -c` means "continue the most recent conversation in this directory",
+  // so panes sharing a cwd all resume the SAME one. Prefer the pane's own id.
+  if (tool === 'claude' && sessionId) return cd + `claude --resume ${sessionId}`;
   const cmds = { claude: 'claude -c', codex: 'codex', aider: 'aider', gemini: 'gemini', kiro: 'kiro-cli' };
   return cd + (cmds[tool] || tool);
 }
@@ -1112,8 +1163,18 @@ function clearResumeEntry(cwd) { const d = loadResume(); delete d[cwd]; saveResu
 
 function maybeShowResumeBanner(pane) {
   if (!pane.cwd) return;
-  const resume = loadResume();
-  const entry = resume[pane.cwd];
+  // Prefer this pane's own remembered session. The cwd-keyed store below holds
+  // exactly one entry per directory, so with several panes in the same cwd it
+  // used to show all of them the same banner running the same `claude -c`.
+  let entry = null;
+  if (pane.detectedTool) {
+    const tool = pane.detectedTool;
+    if (pane.aiSessionId) {
+      entry = { tool, cwd: pane.cwd, name: pane.name, timestamp: Date.now(),
+                cmd: buildResumeCmd(tool, pane.cwd, pane.aiSessionId) };
+    }
+  }
+  if (!entry) entry = loadResume()[pane.cwd] || null;
   if (!entry) return;
   if (Date.now() - entry.timestamp > 7 * 24 * 60 * 60 * 1000) { clearResumeEntry(pane.cwd); return; }
   const banner = pane.el.querySelector('.resume-banner');
@@ -1138,7 +1199,32 @@ setInterval(() => {
     const tool = detectTool(p);
     if (tool && !p.detectedTool) p.detectedTool = tool;
   }
+  claimClaudeSessions();
 }, 4000);
+
+// Bind each Claude pane to one specific conversation file.
+//
+// Several panes commonly share a cwd (four panes all in ~ is the normal case),
+// and Claude writes one .jsonl per conversation in that directory's project
+// folder. Newest-first, we hand each unbound pane the most recent session no
+// other pane has already taken, so four panes end up on four conversations
+// instead of four copies of one.
+let claimBusy = false;
+async function claimClaudeSessions() {
+  if (claimBusy) return;
+  const need = panes.filter((p) => p.detectedTool === 'claude' && !p.aiSessionId && p.cwd);
+  if (!need.length) return;
+  claimBusy = true;
+  try {
+    const byCwd = new Map();
+    for (const p of need) {
+      if (!byCwd.has(p.cwd)) byCwd.set(p.cwd, await window.api.claudeSessions(p.cwd));
+      const taken = new Set([...panes, ...stored].map((x) => x.aiSessionId).filter(Boolean));
+      const free = (byCwd.get(p.cwd) || []).find((sess) => !taken.has(sess.id));
+      if (free) { p.aiSessionId = free.id; scheduleSave(); }
+    }
+  } catch (_) {} finally { claimBusy = false; }
+}
 
 let autoNameBusy = false;
 async function autoNamePass(force) {
@@ -1948,7 +2034,8 @@ const LAYOUTS_KEY = 'tileterm.layouts.v1';
 function paneConfig(p, collapsed) {
   return { name: p.nameInput.value || p.name, color: p.color, bellOn: p.bellOn,
     webUrl: p.webUrl || '', note: p.note || '', manual: !!p.manualName, collapsed: !!collapsed,
-    cwd: p.cwd || '', aiName: p.aiName || '' };
+    cwd: p.cwd || '', aiName: p.aiName || '',
+    aiTool: p.detectedTool || '', aiSessionId: p.aiSessionId || '' };
 }
 function serializePanes() {
   return [...panes.map((p) => paneConfig(p, false)), ...stored.map((p) => paneConfig(p, true))];
@@ -2081,7 +2168,8 @@ window.api.onExit(({ id }) => {
     const resume = loadResume();
     resume[pane.cwd] = {
       tool: pane.detectedTool,
-      cmd: buildResumeCmd(pane.detectedTool, pane.cwd),
+      cmd: buildResumeCmd(pane.detectedTool, pane.cwd, pane.aiSessionId),
+      sessionId: pane.aiSessionId || '',
       cwd: pane.cwd,
       name: pane.nameInput ? (pane.nameInput.value || pane.name) : pane.name,
       timestamp: Date.now(),

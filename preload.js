@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld('api', {
   deleteTranscript: (base) => ipcRenderer.invoke('delete-transcript', { base }),
   revealTranscript: (base) => ipcRenderer.invoke('reveal-transcript', { base }),
   transcriptMeta: (id, patch) => ipcRenderer.send('transcript-meta', { id, patch }),
+  claudeSessions: (cwd) => ipcRenderer.invoke('claude-sessions', { cwd }),
 
   // Companion browser / folders
   pickFile: () => ipcRenderer.invoke('pick-file'),
