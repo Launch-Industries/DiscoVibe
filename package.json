@@ -1,7 +1,7 @@
 {
   "name": "discovibe",
   "productName": "DiscoVibe",
-  "version": "1.8.4",
+  "version": "1.9.0",
   "description": "DiscoVibe — a tiling multi-session terminal for macOS. Equidistant panes across every display, per-pane colors with always-legible text, tile themes, voice mode, quick commands, collapsible panes, saved layouts, and an attention bell that flashes + chimes when a tool is waiting on you.",
   "main": "main.js",
   "author": "Monica Colgan",

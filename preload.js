@@ -30,6 +30,8 @@ contextBridge.exposeInMainWorld('api', {
   // Outstanding-work tracker
   sessionIndex: () => ipcRenderer.invoke('session-index'),
   sessionComplete: (id, completed) => ipcRenderer.invoke('session-complete', { id, completed }),
+  sessionSync: (sessions) => ipcRenderer.invoke('session-sync', { sessions }),
+  sessionSyncConfig: (patch) => ipcRenderer.invoke('session-sync-config', patch),
 
   // Companion browser / folders
   pickFile: () => ipcRenderer.invoke('pick-file'),

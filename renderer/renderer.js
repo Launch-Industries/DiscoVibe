@@ -1730,6 +1730,33 @@ async function openWorkTracker() {
   let data = { host: '', sessions: [] };
   try { data = await window.api.sessionIndex(); } catch (_) {}
 
+  // If sync is configured, push what this machine has and fold in rows from the
+  // others. Local rows win on identity, so a session present here keeps its
+  // working Open button; remote-only rows are listed read-only.
+  try {
+    const res = await window.api.sessionSync(data.sessions || []);
+    if (res && res.ok && Array.isArray(res.sessions)) {
+      const seen = new Set((data.sessions || []).map((x) => x.id));
+      for (const row of res.sessions) {
+        if (seen.has(row.session_id)) {
+          if (row.completed_at) {
+            const local = data.sessions.find((x) => x.id === row.session_id);
+            if (local) local.completedAt = row.completed_at;
+          }
+          continue;
+        }
+        data.sessions.push({
+          id: row.session_id, title: row.ai_title || '', lastPrompt: row.last_prompt || '',
+          cwd: row.cwd || '', projectDir: row.project_dir || '',
+          host: row.device_hostname || '', mtime: row.last_active ? Date.parse(row.last_active) : 0,
+          completedAt: row.completed_at || null, size: 0,
+        });
+      }
+      data.sessions.sort((a, b) => b.mtime - a.mtime);
+      sub.textContent = 'Unfinished Claude sessions, newest first · synced across machines';
+    }
+  } catch (_) {}
+
   const render = () => {
     const all = data.sessions || [];
     const shown = all.filter((x) => (workShowDone ? x.completedAt : !x.completedAt));

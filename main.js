@@ -414,12 +414,79 @@ ipcMain.handle('session-index', () => {
   return { host: os.hostname(), sessions: out };
 });
 
+// Optional cross-machine sync.
+//
+// Off unless the user configures it. DiscoVibe ships to people we do not know
+// (see DISTRIBUTION.md), so no endpoint or token is baked in: without config a
+// machine stays entirely local, which is the sane default. When configured, the
+// call goes to an edge function holding the service-role key, never straight at
+// the table, because the rows contain prompt text.
+function syncConfigPath() { return path.join(app.getPath('userData'), 'sync-config.json'); }
+function readSyncConfig() {
+  try { return JSON.parse(fs.readFileSync(syncConfigPath(), 'utf8')) || null; } catch (_) { return null; }
+}
+
+ipcMain.handle('session-sync-config', (_e, patch) => {
+  if (patch === undefined) {
+    const c = readSyncConfig();
+    // Never hand the token back to the renderer; it only needs to know if set.
+    return c ? { url: c.url || '', anonKey: c.anonKey ? '(set)' : '', token: c.token ? '(set)' : '' } : null;
+  }
+  try { fs.writeFileSync(syncConfigPath(), JSON.stringify(patch || {}, null, 2), 'utf8'); } catch (_) {}
+  return { ok: true };
+});
+
+ipcMain.handle('session-sync', async (_e, { sessions } = {}) => {
+  const cfg = readSyncConfig();
+  if (!cfg || !cfg.url || !cfg.token) return { ok: false, reason: 'not-configured' };
+  try {
+    const r = await fetch(cfg.url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(cfg.anonKey ? { apikey: cfg.anonKey, Authorization: 'Bearer ' + cfg.anonKey } : {}),
+      },
+      body: JSON.stringify({ token: cfg.token, action: 'sync', host: os.hostname(), sessions: sessions || [] }),
+    });
+    if (!r.ok) return { ok: false, reason: 'http-' + r.status };
+    const data = await r.json();
+    // Remote completion wins over local silence: a tick made on another Mac
+    // should show here, and the local file is the offline cache.
+    const status = readSessionStatus();
+    for (const row of (data.sessions || [])) {
+      if (row.completed_at && !status[row.session_id]) {
+        status[row.session_id] = { completedAt: row.completed_at, host: row.device_hostname || '' };
+      }
+    }
+    writeSessionStatus(status);
+    return { ok: true, sessions: data.sessions || [] };
+  } catch (err) {
+    return { ok: false, reason: String(err && err.message || err) };
+  }
+});
+
+async function pushCompletion(id, completed) {
+  const cfg = readSyncConfig();
+  if (!cfg || !cfg.url || !cfg.token) return;
+  try {
+    await fetch(cfg.url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(cfg.anonKey ? { apikey: cfg.anonKey, Authorization: 'Bearer ' + cfg.anonKey } : {}),
+      },
+      body: JSON.stringify({ token: cfg.token, action: 'complete', id, completed, host: os.hostname() }),
+    });
+  } catch (_) {}
+}
+
 ipcMain.handle('session-complete', (_e, { id, completed } = {}) => {
   if (!id) return { ok: false };
   const status = readSessionStatus();
   if (completed) status[id] = { completedAt: new Date().toISOString(), host: os.hostname() };
   else delete status[id];
   writeSessionStatus(status);
+  pushCompletion(id, !!completed);          // fire-and-forget; local state already saved
   return { ok: true };
 });
 
