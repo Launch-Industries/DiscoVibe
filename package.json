@@ -13,7 +13,8 @@
     "postinstall": "electron-rebuild -f -w node-pty",
     "pack": "electron-builder --dir",
     "dist": "electron-builder --mac",
-    "release": "electron-builder --mac --publish=always"
+    "release": "electron-builder --mac --publish=always",
+    "release:signed": "set -a && . ./.env.notarize && set +a && electron-builder --mac --publish=always"
   },
   "build": {
     "appId": "biz.launchindustries.discovibe",
