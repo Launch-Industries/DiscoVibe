@@ -1438,7 +1438,9 @@ function applyTileTheme(name) {
 }
 // Window frame color follows the active tile theme (or the chrome accent in Auto).
 function applyThemeBorder() {
-  const color = THEME_ACCENTS[tileTheme] || (themeMode === 'light' ? '#2f6fe0' : '#5b9dff');
+  // Same two values THEME_ACCENTS already holds; read them from there so the
+  // accent lives in one place.
+  const color = THEME_ACCENTS[tileTheme] || THEME_ACCENTS[themeMode === 'light' ? 'Light' : 'Dark'];
   document.documentElement.style.setProperty('--theme-border', color);
 }
 
@@ -2019,11 +2021,39 @@ function restoreConfigs(list) {
 // Theme / mute / settings application
 // ===========================================================================
 const themeBtn = document.getElementById('btn-theme');
-function applyThemeMode(mode, fromRemote) {
+// Recolour panes that are still wearing an auto-assigned colour, and leave the
+// hand-picked ones alone — styles.css promises per-pane colours stay user
+// controlled. Membership of either palette is the only signal available for
+// telling the two apart; the four light presets that also appear in
+// LIGHT_PALETTE will be treated as auto, which is a fair trade for not
+// clobbering a colour someone actually chose.
+function reskinAutoPanes() {
+  const to = themeMode === 'light' ? LIGHT_PALETTE : DARK_PALETTE;
+  const auto = new Set([...DARK_PALETTE, ...LIGHT_PALETTE].map((c) => c.toLowerCase()));
+  [...panes, ...stored].forEach((p, i) => {
+    if (!auto.has(String(p.color || '').toLowerCase())) return;
+    applyColor(p, to[i % to.length]);   // same positional mapping as reskinAll
+  });
+  renderTray();
+  scheduleSave();
+}
+
+// `reskin` is opt-in: only a deliberate light/dark switch should recolour panes.
+// Boot and layout restores call this with colours already decided and must not
+// have them overwritten.
+function applyThemeMode(mode, fromRemote, reskin) {
+  const changed = themeMode !== mode;
   themeMode = mode;
   document.body.classList.toggle('light', mode === 'light');
   setBtnIcon(themeBtn, mode === 'light' ? 'sun' : 'moon', mode === 'light' ? 'Light' : 'Dark');
-  applyThemeBorder();
+  if (reskin && changed) {
+    // The toggle is the single source of truth now that TILE_THEMES is just
+    // Dark and Light: drop any explicit pick so new panes follow the mode too.
+    tileTheme = '';
+    setBtnIcon(document.getElementById('btn-tiles'), 'palette', 'Tiles');
+    reskinAutoPanes();
+  }
+  applyThemeBorder();   // after tileTheme, which it reads
   if (!fromRemote) { saveGlobals(); window.api.broadcast({ type: 'theme', value: mode }); }
 }
 const muteBtn = document.getElementById('btn-mute');
@@ -2161,7 +2191,7 @@ addCountEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') addMany(r
 document.getElementById('btn-tiles').addEventListener('click', (e) => openTilePicker(e.currentTarget));
 document.getElementById('btn-commands').addEventListener('click', (e) => openCommands(e.currentTarget));
 document.getElementById('btn-clips').addEventListener('click', (e) => openClips(e.currentTarget));
-themeBtn.addEventListener('click', () => applyThemeMode(themeMode === 'light' ? 'dark' : 'light'));
+themeBtn.addEventListener('click', () => applyThemeMode(themeMode === 'light' ? 'dark' : 'light', false, true));
 muteBtn.addEventListener('click', () => setMute(!soundMuted));
 document.getElementById('btn-layouts').addEventListener('click', (e) => openLayouts(e.currentTarget));
 document.getElementById('btn-settings').addEventListener('click', (e) => openGlobalSettings(e.currentTarget));
@@ -2379,7 +2409,7 @@ window.api.onBroadcast((p) => {
   else if (p.type === 'textSize') applyGlobalTextSize(p.value, true);
   else if (p.type === 'font') applyGlobalFont(p.value, true);
   else if (p.type === 'titleCenter') applyGlobalTitleCenter(p.value, true);
-  else if (p.type === 'theme') applyThemeMode(p.value, true);
+  else if (p.type === 'theme') applyThemeMode(p.value, true, true);   // keep every window's panes in step
   else if (p.type === 'mute') setMute(p.value, true);
   else if (p.type === 'settings') { Object.assign(settings, p.value); applySettings(); }
   else if (p.type === 'tileTheme') setTileTheme(p.value, true);
