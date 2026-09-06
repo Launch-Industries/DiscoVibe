@@ -1689,6 +1689,113 @@ async function openRecovery() {
   setTimeout(() => search.focus(), 60);
 }
 
+// ---------------------------------------------------------------------------
+// Outstanding work — unfinished Claude sessions
+// ---------------------------------------------------------------------------
+// Sessions pile up faster than anyone remembers them. Claude Code already
+// writes an ai-title and a last-prompt into each conversation, so this lists
+// them by what they actually were and where they stopped, newest first, and
+// lets you tick one off once it is genuinely done. Completed rows are hidden
+// but recoverable via "Show completed".
+let workShowDone = false;
+
+async function openWorkTracker() {
+  const ov = document.createElement('div'); ov.id = 'recover';
+  const card = document.createElement('div'); card.className = 'ob-card'; card.style.maxWidth = '820px';
+  ov.appendChild(card);
+  const close = () => ov.remove();
+  ov.addEventListener('mousedown', (e) => { if (e.target === ov) close(); });
+  document.addEventListener('keydown', function esc(e) {
+    if (e.key === 'Escape') { close(); document.removeEventListener('keydown', esc); }
+  });
+
+  const head = document.createElement('div'); head.className = 'ob-head';
+  head.innerHTML = lic('list-checks') + ' Outstanding work';
+  const sub = document.createElement('div'); sub.className = 'ob-sub';
+  sub.textContent = 'Unfinished Claude sessions, newest first.';
+  card.append(head, sub);
+
+  const list = document.createElement('div'); list.className = 'rec-list';
+  card.appendChild(list);
+
+  const actions = document.createElement('div'); actions.className = 'ob-actions';
+  const toggle = document.createElement('button');
+  const done = document.createElement('button'); done.textContent = 'Done';
+  done.addEventListener('click', close);
+  actions.append(toggle, done);
+  card.appendChild(actions);
+  document.body.appendChild(ov);
+  renderIcons();
+
+  let data = { host: '', sessions: [] };
+  try { data = await window.api.sessionIndex(); } catch (_) {}
+
+  const render = () => {
+    const all = data.sessions || [];
+    const shown = all.filter((x) => (workShowDone ? x.completedAt : !x.completedAt));
+    const doneCount = all.filter((x) => x.completedAt).length;
+    toggle.textContent = workShowDone ? `← Outstanding (${all.length - doneCount})` : `Show completed (${doneCount})`;
+    list.innerHTML = '';
+    if (!shown.length) {
+      const empty = document.createElement('div'); empty.className = 'layout-empty';
+      empty.textContent = workShowDone ? 'Nothing marked complete yet.' : 'Nothing outstanding. All caught up.';
+      list.appendChild(empty);
+      return;
+    }
+    for (const sess of shown) {
+      const row = document.createElement('div'); row.className = 'rec-row';
+      const info = document.createElement('div'); info.className = 'rec-info';
+
+      const title = document.createElement('div'); title.className = 'rec-name';
+      title.textContent = sess.title || 'Untitled session';
+      const meta = document.createElement('div'); meta.className = 'rec-meta';
+      const where = (sess.cwd || '').replace(/^\/Users\/[^/]+/, '~');
+      const elsewhere = sess.host && data.host && sess.host !== data.host;
+      meta.textContent = [fmtWhen(sess.mtime), where, elsewhere ? 'on ' + sess.host : '']
+        .filter(Boolean).join('  ·  ');
+      const prev = document.createElement('div'); prev.className = 'rec-prev';
+      prev.textContent = sess.lastPrompt ? '“' + sess.lastPrompt.replace(/\s+/g, ' ').slice(0, 160) + '”' : '';
+      info.append(title, meta, prev);
+
+      const btns = document.createElement('div'); btns.className = 'rec-btns';
+
+      // Resume THIS conversation, not whatever was most recent in the folder.
+      const open = document.createElement('button');
+      open.innerHTML = lic('rotate-ccw') + '<span>Open</span>';
+      if (elsewhere) { open.disabled = true; open.title = 'This session lives on ' + sess.host; }
+      else {
+        open.title = 'New terminal running claude --resume';
+        open.addEventListener('click', () => {
+          const p = addPane({ name: sess.title ? sess.title.slice(0, 24) : '', cwd: sess.cwd });
+          if (p) {
+            p.aiSessionId = sess.id; p.detectedTool = 'claude'; scheduleSave();
+            setTimeout(() => window.api.input(p.id, buildResumeCmd('claude', sess.cwd, sess.id) + '\r'), 700);
+          }
+          close();
+        });
+      }
+
+      const tick = document.createElement('button');
+      tick.innerHTML = lic(sess.completedAt ? 'rotate-ccw' : 'check') +
+        '<span>' + (sess.completedAt ? 'Reopen' : 'Complete') + '</span>';
+      tick.title = sess.completedAt ? 'Move back to outstanding' : 'Mark this work finished';
+      tick.addEventListener('click', async () => {
+        const next = !sess.completedAt;
+        await window.api.sessionComplete(sess.id, next);
+        sess.completedAt = next ? new Date().toISOString() : null;
+        render(); renderIcons();
+      });
+
+      btns.append(open, tick);
+      row.append(info, btns);
+      list.appendChild(row);
+    }
+    renderIcons();
+  };
+  toggle.addEventListener('click', () => { workShowDone = !workShowDone; render(); renderIcons(); });
+  render();
+}
+
 // Read a recorded session back, with select-all + copy that actually work.
 async function viewTranscript(s) {
   const r = await window.api.readTranscript(s.base);
@@ -2297,6 +2404,7 @@ document.getElementById('btn-commands').addEventListener('click', (e) => openCom
 document.getElementById('btn-clips').addEventListener('click', (e) => openClips(e.currentTarget));
 themeBtn.addEventListener('click', () => applyThemeMode(themeMode === 'light' ? 'dark' : 'light', false, true));
 muteBtn.addEventListener('click', () => setMute(!soundMuted));
+document.getElementById('btn-work').addEventListener('click', () => openWorkTracker());
 document.getElementById('btn-layouts').addEventListener('click', (e) => openLayouts(e.currentTarget));
 document.getElementById('btn-settings').addEventListener('click', (e) => openGlobalSettings(e.currentTarget));
 document.getElementById('btn-feedback').addEventListener('click', () => openFeedback());
@@ -2494,6 +2602,7 @@ window.api.onMenu((action) => {
   else if (action === 'select-all') selectAllFocused(false);
   else if (action === 'select-all-scrollback') selectAllFocused(true);
   else if (action === 'recover-sessions') openRecovery();
+  else if (action === 'work-tracker') openWorkTracker();
   else if (action === 'close-terminal' && focusedId) closePane(focusedId);
   else if (action === 'reopen-closed') reopenClosed();
   else if (action === 'kill-all') killAll();

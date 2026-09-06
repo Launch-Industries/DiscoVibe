@@ -27,6 +27,9 @@ contextBridge.exposeInMainWorld('api', {
   revealTranscript: (base) => ipcRenderer.invoke('reveal-transcript', { base }),
   transcriptMeta: (id, patch) => ipcRenderer.send('transcript-meta', { id, patch }),
   claudeSessions: (cwd) => ipcRenderer.invoke('claude-sessions', { cwd }),
+  // Outstanding-work tracker
+  sessionIndex: () => ipcRenderer.invoke('session-index'),
+  sessionComplete: (id, completed) => ipcRenderer.invoke('session-complete', { id, completed }),
 
   // Companion browser / folders
   pickFile: () => ipcRenderer.invoke('pick-file'),

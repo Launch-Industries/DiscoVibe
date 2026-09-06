@@ -323,6 +323,106 @@ function claudeProjectDir(cwd) {
   return path.join(os.homedir(), '.claude', 'projects', String(cwd).replace(/[^A-Za-z0-9]/g, '-'));
 }
 
+// ---- Outstanding-work tracker ----------------------------------------------
+// Claude Code writes one .jsonl per conversation and, inside it, an `ai-title`
+// record ("Presentations site bugs and reorganization") plus a `last-prompt`
+// record. That is enough to list unfinished work in a way a human recognises,
+// without opening the transcript.
+//
+// Completion is DiscoVibe's own state, kept beside the app's data so nothing
+// ever writes into Claude's files. Records carry a hostname and timestamp so
+// the same shape can sync between machines later.
+
+function sessionStatusPath() {
+  return path.join(app.getPath('userData'), 'session-status.json');
+}
+function readSessionStatus() {
+  try { return JSON.parse(fs.readFileSync(sessionStatusPath(), 'utf8')) || {}; } catch (_) { return {}; }
+}
+function writeSessionStatus(map) {
+  try { fs.writeFileSync(sessionStatusPath(), JSON.stringify(map, null, 2), 'utf8'); } catch (_) {}
+}
+
+// Read a slice from each end rather than the whole file: these run to tens of
+// megabytes, the title/prompt records are rewritten as the session goes so the
+// newest are near the end, and the opening user message is a good fallback
+// title for a session too short to have earned an ai-title yet.
+function readJsonlEdge(file, size, fromEnd, bytes) {
+  const len = Math.min(size, bytes);
+  const pos = fromEnd ? size - len : 0;
+  let fd;
+  try { fd = fs.openSync(file, 'r'); } catch (_) { return ''; }
+  const buf = Buffer.alloc(len);
+  try { fs.readSync(fd, buf, 0, len, pos); } finally { try { fs.closeSync(fd); } catch (_) {} }
+  let text = buf.toString('utf8');
+  if (fromEnd && size > len) { const nl = text.indexOf('\n'); if (nl >= 0) text = text.slice(nl + 1); }
+  return text;
+}
+
+function firstUserText(d) {
+  const c = d && d.message && d.message.content;
+  if (typeof c === 'string') return c;
+  if (Array.isArray(c)) { for (const part of c) if (part && part.type === 'text' && part.text) return part.text; }
+  return '';
+}
+
+function readSessionMeta(file) {
+  let size = 0;
+  let mtime = 0;
+  try { const st = fs.statSync(file); size = st.size; mtime = st.mtimeMs; } catch (_) { return null; }
+
+  const meta = { id: path.basename(file, '.jsonl'), title: '', lastPrompt: '', cwd: '', mtime, size };
+
+  const scan = (text, isTail) => {
+    for (const line of text.split('\n')) {
+      if (!line.trim()) continue;
+      let d; try { d = JSON.parse(line); } catch (_) { continue; }
+      if (d.cwd && !meta.cwd) meta.cwd = d.cwd;
+      if (d.type === 'ai-title' && d.aiTitle) meta.title = d.aiTitle;          // last wins
+      if (d.type === 'last-prompt' && d.lastPrompt) meta.lastPrompt = d.lastPrompt;
+      if (!isTail && !meta.firstPrompt && d.type === 'user') {
+        const t = firstUserText(d).trim();
+        if (t && !t.startsWith('<')) meta.firstPrompt = t;
+      }
+    }
+  };
+  scan(readJsonlEdge(file, size, true, 256 * 1024), true);
+  if (!meta.title || !meta.cwd) scan(readJsonlEdge(file, size, false, 64 * 1024), false);
+  if (!meta.title) meta.title = (meta.firstPrompt || '').slice(0, 80);
+  delete meta.firstPrompt;
+  return meta;
+}
+
+ipcMain.handle('session-index', () => {
+  const root = path.join(os.homedir(), '.claude', 'projects');
+  const status = readSessionStatus();
+  const out = [];
+  let dirs;
+  try { dirs = fs.readdirSync(root); } catch (_) { return { host: os.hostname(), sessions: [] }; }
+  for (const d of dirs) {
+    let files;
+    try { files = fs.readdirSync(path.join(root, d)).filter((f) => f.endsWith('.jsonl')); } catch (_) { continue; }
+    for (const f of files) {
+      const m = readSessionMeta(path.join(root, d, f));
+      if (!m) continue;
+      const st = status[m.id] || null;
+      out.push({ ...m, projectDir: d, host: os.hostname(),
+                 completedAt: st && st.completedAt ? st.completedAt : null });
+    }
+  }
+  out.sort((a, b) => b.mtime - a.mtime);
+  return { host: os.hostname(), sessions: out };
+});
+
+ipcMain.handle('session-complete', (_e, { id, completed } = {}) => {
+  if (!id) return { ok: false };
+  const status = readSessionStatus();
+  if (completed) status[id] = { completedAt: new Date().toISOString(), host: os.hostname() };
+  else delete status[id];
+  writeSessionStatus(status);
+  return { ok: true };
+});
+
 ipcMain.handle('claude-sessions', (_e, { cwd } = {}) => {
   const dir = claudeProjectDir(cwd);
   if (!dir) return [];
