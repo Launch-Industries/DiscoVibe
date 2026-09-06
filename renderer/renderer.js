@@ -1026,23 +1026,39 @@ const MODEL_PATTERNS = [
 function detectModel(pane) {
   const buf = pane.term.buffer.active;
   const start = Math.max(0, buf.length - 60);
-  for (let i = buf.length - 1; i >= start; i--) {       // newest line first
+
+  // Two tiers, because the buffer holds conversation text as well as the tool's
+  // own status line. Talking *about* Codex in a Claude pane used to flip the
+  // badge to "Codex": the scan returned on the bottom-most line containing any
+  // model word, and chat output sits below the status line.
+  //
+  // Strong  = the name carries a version or a context marker ("Opus 5",
+  //           "opus-5", "Opus 4.1", "claude-opus-4-5"), which is what a real
+  //           status line looks like.
+  // Weak    = a bare mention, which prose produces just as easily.
+  // A strong match anywhere in the window beats a weak one, and a weak match
+  // only counts in the last few lines, where a status line actually lives.
+  let weak = '';
+  for (let i = buf.length - 1; i >= start; i--) {
     const ln = buf.getLine(i); if (!ln) continue;
-    const s = ln.translateToString(true);
-    if (!s.trim()) continue;
-    for (const [re, label] of MODEL_PATTERNS) if (re.test(s)) {
-      // Claude's status line renders as "Opus 5 (1m)": keep the version digit
-      // and the context marker, both of which the bare label drops.
+    const str = ln.translateToString(true);
+    if (!str.trim()) continue;
+    for (const [re, label] of MODEL_PATTERNS) {
+      if (!re.test(str)) continue;
       // Versions appear as "Opus 5", "Opus 4.1" and "haiku-4-5": accept a space
       // or hyphen separator, and normalise "4-5" to "4.5".
-      const ver = s.match(new RegExp(label + '[\\s-]*([0-9](?:[0-9.-]*[0-9])?)', 'i'));
-      const ctx = /\(\s*(\d+m)\s*\)/i.exec(s);
-      let out = label + (ver ? ' ' + ver[1].replace(/-/g, '.') : '');
-      if (ctx) out += ' ' + ctx[1].toLowerCase();
-      return out;
+      const ver = str.match(new RegExp(label + '[\\s-]*([0-9](?:[0-9.-]*[0-9])?)', 'i'));
+      const ctx = /\(\s*(\d+m)\s*\)/i.exec(str);
+      if (ver || ctx) {
+        let out = label + (ver ? ' ' + ver[1].replace(/-/g, '.') : '');
+        if (ctx) out += ' ' + ctx[1].toLowerCase();
+        return out;                                  // strong: done
+      }
+      if (!weak && i >= buf.length - 4) weak = label;
+      break;                                         // one label per line
     }
   }
-  return '';
+  return weak;
 }
 
 // Reasoning / effort level, where a tool actually prints one.
