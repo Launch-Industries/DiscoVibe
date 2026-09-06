@@ -4,13 +4,10 @@
 <meta charset="utf-8">
 <title>DiscoVibe</title>
 <style>
-  /* LIDS type. PP Formula Condensed Black for the wordmark, Instrument Sans for
-     everything else — both from launch-shared/registry/fonts/lids. */
-  @font-face {
-    font-family: "PP Formula Condensed";
-    src: url("fonts/lids/PPFormula-CondensedBlack.otf") format("opentype");
-    font-weight: 900; font-style: normal; font-display: block;
-  }
+  /* LIDS type. The wordmark is PP Formula Condensed Black, but as outlines
+     below rather than a bundled face: it is one fixed word, so shipping a
+     licensed font file inside a public app buys nothing. Instrument Sans is
+     embedded normally — it is OFL. */
   @font-face {
     font-family: "Instrument Sans";
     src: url("fonts/lids/InstrumentSans-Variable-latin.woff2") format("woff2");
@@ -54,14 +51,10 @@
   #rule { display: flex; gap: clamp(5px, .5vw, 10px); }
   #rule span { width: clamp(30px, 3.4vw, 72px); height: clamp(5px, .55vh, 11px); border-radius: 4px; }
 
-  #mark {
-    font-family: "PP Formula Condensed", "Instrument Sans", system-ui, sans-serif;
-    font-weight: 900;
-    font-size: clamp(56px, 8.4vw, 190px);
-    line-height: .94;
-    letter-spacing: .2px;
-    color: #ffffff;
-  }
+  /* 3.438x the old font-size at each stop, that being the wordmark's advance
+     width in em, so it lands at exactly the size the live text did. */
+  #mark { display: block; width: clamp(192px, 28.9vw, 653px); height: auto; }
+  #mark path { fill: #ffffff; }
   #tag { font-size: clamp(14px, 1.5vw, 32px); line-height: 1.4; color: #8890b8; }
 
   #foot {
@@ -91,7 +84,7 @@
         <span style="background:#FFD100"></span>
         <span style="background:#51D9DD"></span>
       </div>
-      <div id="mark">DiscoVibe</div>
+      <svg id="mark" viewBox="25 -810 3397 820" role="img" aria-label="DiscoVibe"><path d="M25 0H209C382 0 429 -59 429 -218V-582C429 -743 382 -800 209 -800H25ZM199 -130V-670H210C241 -670 251 -660 251 -622V-178C251 -141 242 -130 212 -130ZM473 -650V0H641V-650ZM462 -744C462 -706 489 -680 557 -680C625 -680 652 -706 652 -744C652 -784 625 -810 557 -810C489 -810 462 -784 462 -744ZM972 -362 878 -427C849 -447 845 -462 845 -482C845 -504 849 -520 871 -520C893 -520 897 -504 897 -482V-440H1069V-486C1069 -605 991 -660 874 -660C732 -660 673 -577 673 -474C673 -387 716 -345 773 -306L840 -260C897 -221 899 -205 899 -179C899 -146 895 -130 872 -130C850 -130 847 -146 847 -179V-231H674V-175C674 -35 765 10 870 10C1012 10 1071 -72 1071 -188C1071 -276 1036 -318 972 -362ZM1320 -470V-395H1492V-427C1492 -595 1420 -660 1294 -660C1167 -660 1096 -595 1096 -427V-223C1096 -55 1167 10 1294 10C1420 10 1492 -55 1492 -223V-255H1320V-180C1320 -144 1316 -130 1294 -130C1271 -130 1268 -144 1268 -180V-470C1268 -506 1271 -520 1294 -520C1316 -520 1320 -506 1320 -470ZM1715 10C1842 10 1913 -55 1913 -223V-427C1913 -595 1842 -660 1715 -660C1588 -660 1517 -595 1517 -427V-223C1517 -55 1588 10 1715 10ZM1689 -180V-470C1689 -506 1693 -520 1715 -520C1737 -520 1741 -506 1741 -470V-180C1741 -144 1737 -130 1715 -130C1693 -130 1689 -144 1689 -180ZM2025 0H2266L2362 -800H2185L2150 -187L2148 -162H2144L2142 -187L2106 -800H1929ZM2385 -650V0H2553V-650ZM2374 -744C2374 -706 2401 -680 2469 -680C2537 -680 2564 -706 2564 -744C2564 -784 2537 -810 2469 -810C2401 -810 2374 -784 2374 -744ZM2599 0H2767V-51C2799 -16 2827 10 2883 10C2969 10 2991 -58 2991 -132V-500C2991 -608 2956 -660 2884 -660C2818 -660 2787 -618 2767 -576V-800H2599ZM2767 -172V-477C2767 -504 2772 -518 2793 -518C2814 -518 2819 -503 2819 -476V-173C2819 -146 2814 -131 2793 -131C2772 -131 2767 -145 2767 -172ZM3026 -223C3026 -55 3097 10 3224 10C3350 10 3422 -55 3422 -223V-239H3250V-180C3250 -144 3246 -130 3224 -130C3201 -130 3198 -144 3198 -180V-279H3422V-427C3422 -595 3350 -660 3224 -660C3097 -660 3026 -595 3026 -427ZM3198 -400V-470C3198 -506 3201 -520 3224 -520C3246 -520 3250 -506 3250 -470V-400Z"/></svg>
       <div id="tag">Tiled terminals for vibe coders</div>
     </div>
 
