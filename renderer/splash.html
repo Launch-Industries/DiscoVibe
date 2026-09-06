@@ -23,7 +23,7 @@
     width: 100vw; height: 100vh;
     overflow: hidden;
     /* --chrome-bg from the main window, so the handoff has no colour step. */
-    background: #04050f;
+    background: #0a0718;   /* deep violet-black, so any letterboxed edge matches the galaxy art */
     font-family: "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
   }
 
@@ -33,17 +33,60 @@
     position: absolute; inset: 0;
     width: 100%; height: 100%;
     object-fit: cover; object-position: 62% 45%;
-    mix-blend-mode: screen;
+    /* No blend mode and no filter. Both were added for the ORIGINAL art, which
+       was a dim painterly JPEG drawn on a flat black field: screen dropped that
+       field to the backdrop and the filter put colour back. The current art is a
+       full-bleed galaxy render that is already colour-corrected, so screen only
+       lifted its blacks into haze and brightness(1.1) blew the highlights, which
+       is what turned Doug pale and the mint beanie tag white. */
   }
+  /* Warm the area Doug occupies so he reads as the subject rather than as
+     wallpaper. Sits under the scrim, so it never fights the type. */
+  #focus {
+    position: absolute; inset: 0;
+    background: radial-gradient(58% 72% at 63% 52%,
+      rgba(81,217,221,.16) 0%, rgba(81,217,221,.05) 42%, rgba(81,217,221,0) 70%);
+    mix-blend-mode: screen;
+    pointer-events: none;
+  }
+  /* Only as wide as the type needs.
+     The old stop ran solid to 26% and was still 88% opaque at 44%, which is
+     exactly where the laptop glow and the light beam sit, so the brightest part
+     of the art was being painted out. Type ends around 35%, so the fall-off now
+     completes by 50%. */
+  /* Disco border — the brand ramp travelling around the edge, matching the
+     main window's Disco Mode frame. The two masks cut the middle out of a
+     filled rect, leaving just the ring, so one element is the whole border. */
+  #discoframe {
+    position: absolute; inset: 0;
+    padding: 5px;
+    background: linear-gradient(90deg,
+      #F9465C, #FFD100, #14D592, #51D9DD, #F9465C, #FFD100, #14D592, #51D9DD, #F9465C);
+    background-size: 400% 100%;
+    /* Slow, like the main window's Disco Mode frame, which reads as a gentle
+       colour drift rather than motion. The gradient covers 400% of the width,
+       so duration is the knob: higher is slower. */
+    animation: disco-travel 24s linear infinite;
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+            mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+            mask-composite: exclude;
+    pointer-events: none;
+    z-index: 9;
+  }
+  @keyframes disco-travel { to { background-position: -400% 0; } }
+  @media (prefers-reduced-motion: reduce) { #discoframe { animation: none; } }
+
   #scrim {
     position: absolute; inset: 0;
-    background: linear-gradient(100deg, #04050f 26%, rgba(4,5,15,.88) 44%, rgba(4,5,15,0) 70%);
+    background: linear-gradient(100deg,
+      #04050f 0%, rgba(4,5,15,.92) 20%, rgba(4,5,15,.52) 34%, rgba(4,5,15,0) 50%);
   }
 
   #copy {
     position: absolute;
     left: clamp(40px, 6vw, 150px);
-    top: 50%; transform: translateY(-50%);
+    top: 43%; transform: translateY(-50%);
     display: flex; flex-direction: column;
     gap: clamp(14px, 1.6vh, 30px);
     max-width: 46vw;
@@ -53,7 +96,19 @@
 
   /* 3.438x the old font-size at each stop, that being the wordmark's advance
      width in em, so it lands at exactly the size the live text did. */
+  /* Wordmark + trademark sit on one row so the TM hangs off the DiscoVibe
+     logotype and scales with it rather than drifting at other window sizes. */
+  #markrow { display: flex; align-items: flex-start; gap: clamp(4px, .5vw, 12px); }
   #mark { display: block; width: clamp(192px, 28.9vw, 653px); height: auto; }
+  #tm {
+    color: #ffffff;
+    font-size: clamp(9px, 1.05vw, 22px);
+    font-weight: 600;
+    line-height: 1;
+    margin-top: clamp(3px, .5vh, 12px);
+    letter-spacing: .02em;
+    user-select: none;
+  }
   #mark path { fill: #ffffff; }
   #tag { font-size: clamp(14px, 1.5vw, 32px); line-height: 1.4; color: #8890b8; }
 
@@ -66,7 +121,10 @@
   #track { width: clamp(148px, 15vw, 320px); height: clamp(3px, .35vh, 6px); border-radius: 4px; background: rgba(136,144,184,.22); overflow: hidden; }
   #bar { width: 24%; height: 100%; border-radius: 3px; background: #51D9DD; animation: sweep 1.6s ease-in-out infinite; }
   @keyframes sweep { 0% { transform: translateX(-100%); } 100% { transform: translateX(420%); } }
-  #org { display: flex; align-items: baseline; gap: clamp(8px, .8vw, 16px); }
+  #org { display: flex; align-items: center; gap: clamp(8px, .8vw, 16px); }
+  /* The real Launch Industries lockup rather than set type. The on-dark
+     variant is solid white, which is the one that works on #04050f. */
+  #org img { height: clamp(16px, 1.7vw, 32px); width: auto; display: block; }
   #org b { font-size: clamp(11px, 1.05vw, 20px); font-weight: 600; letter-spacing: .9px; text-transform: uppercase; color: #dde2f2; }
   #org span { font-size: clamp(11px, 1.05vw, 20px); color: #4f5763; }
 
@@ -76,7 +134,9 @@
 <body>
   <div id="splash">
     <img id="art" src="splash/doug.jpg" alt="">
+    <div id="focus"></div>
     <div id="scrim"></div>
+    <div id="discoframe"></div>
 
     <div id="copy">
       <div id="rule">
@@ -84,13 +144,16 @@
         <span style="background:#FFD100"></span>
         <span style="background:#51D9DD"></span>
       </div>
-      <svg id="mark" viewBox="25 -810 3397 820" role="img" aria-label="DiscoVibe"><path d="M25 0H209C382 0 429 -59 429 -218V-582C429 -743 382 -800 209 -800H25ZM199 -130V-670H210C241 -670 251 -660 251 -622V-178C251 -141 242 -130 212 -130ZM473 -650V0H641V-650ZM462 -744C462 -706 489 -680 557 -680C625 -680 652 -706 652 -744C652 -784 625 -810 557 -810C489 -810 462 -784 462 -744ZM972 -362 878 -427C849 -447 845 -462 845 -482C845 -504 849 -520 871 -520C893 -520 897 -504 897 -482V-440H1069V-486C1069 -605 991 -660 874 -660C732 -660 673 -577 673 -474C673 -387 716 -345 773 -306L840 -260C897 -221 899 -205 899 -179C899 -146 895 -130 872 -130C850 -130 847 -146 847 -179V-231H674V-175C674 -35 765 10 870 10C1012 10 1071 -72 1071 -188C1071 -276 1036 -318 972 -362ZM1320 -470V-395H1492V-427C1492 -595 1420 -660 1294 -660C1167 -660 1096 -595 1096 -427V-223C1096 -55 1167 10 1294 10C1420 10 1492 -55 1492 -223V-255H1320V-180C1320 -144 1316 -130 1294 -130C1271 -130 1268 -144 1268 -180V-470C1268 -506 1271 -520 1294 -520C1316 -520 1320 -506 1320 -470ZM1715 10C1842 10 1913 -55 1913 -223V-427C1913 -595 1842 -660 1715 -660C1588 -660 1517 -595 1517 -427V-223C1517 -55 1588 10 1715 10ZM1689 -180V-470C1689 -506 1693 -520 1715 -520C1737 -520 1741 -506 1741 -470V-180C1741 -144 1737 -130 1715 -130C1693 -130 1689 -144 1689 -180ZM2025 0H2266L2362 -800H2185L2150 -187L2148 -162H2144L2142 -187L2106 -800H1929ZM2385 -650V0H2553V-650ZM2374 -744C2374 -706 2401 -680 2469 -680C2537 -680 2564 -706 2564 -744C2564 -784 2537 -810 2469 -810C2401 -810 2374 -784 2374 -744ZM2599 0H2767V-51C2799 -16 2827 10 2883 10C2969 10 2991 -58 2991 -132V-500C2991 -608 2956 -660 2884 -660C2818 -660 2787 -618 2767 -576V-800H2599ZM2767 -172V-477C2767 -504 2772 -518 2793 -518C2814 -518 2819 -503 2819 -476V-173C2819 -146 2814 -131 2793 -131C2772 -131 2767 -145 2767 -172ZM3026 -223C3026 -55 3097 10 3224 10C3350 10 3422 -55 3422 -223V-239H3250V-180C3250 -144 3246 -130 3224 -130C3201 -130 3198 -144 3198 -180V-279H3422V-427C3422 -595 3350 -660 3224 -660C3097 -660 3026 -595 3026 -427ZM3198 -400V-470C3198 -506 3201 -520 3224 -520C3246 -520 3250 -506 3250 -470V-400Z"/></svg>
+      <div id="markrow"><svg id="mark" viewBox="25 -810 3397 820" role="img" aria-label="DiscoVibe"><path d="M25 0H209C382 0 429 -59 429 -218V-582C429 -743 382 -800 209 -800H25ZM199 -130V-670H210C241 -670 251 -660 251 -622V-178C251 -141 242 -130 212 -130ZM473 -650V0H641V-650ZM462 -744C462 -706 489 -680 557 -680C625 -680 652 -706 652 -744C652 -784 625 -810 557 -810C489 -810 462 -784 462 -744ZM972 -362 878 -427C849 -447 845 -462 845 -482C845 -504 849 -520 871 -520C893 -520 897 -504 897 -482V-440H1069V-486C1069 -605 991 -660 874 -660C732 -660 673 -577 673 -474C673 -387 716 -345 773 -306L840 -260C897 -221 899 -205 899 -179C899 -146 895 -130 872 -130C850 -130 847 -146 847 -179V-231H674V-175C674 -35 765 10 870 10C1012 10 1071 -72 1071 -188C1071 -276 1036 -318 972 -362ZM1320 -470V-395H1492V-427C1492 -595 1420 -660 1294 -660C1167 -660 1096 -595 1096 -427V-223C1096 -55 1167 10 1294 10C1420 10 1492 -55 1492 -223V-255H1320V-180C1320 -144 1316 -130 1294 -130C1271 -130 1268 -144 1268 -180V-470C1268 -506 1271 -520 1294 -520C1316 -520 1320 -506 1320 -470ZM1715 10C1842 10 1913 -55 1913 -223V-427C1913 -595 1842 -660 1715 -660C1588 -660 1517 -595 1517 -427V-223C1517 -55 1588 10 1715 10ZM1689 -180V-470C1689 -506 1693 -520 1715 -520C1737 -520 1741 -506 1741 -470V-180C1741 -144 1737 -130 1715 -130C1693 -130 1689 -144 1689 -180ZM2025 0H2266L2362 -800H2185L2150 -187L2148 -162H2144L2142 -187L2106 -800H1929ZM2385 -650V0H2553V-650ZM2374 -744C2374 -706 2401 -680 2469 -680C2537 -680 2564 -706 2564 -744C2564 -784 2537 -810 2469 -810C2401 -810 2374 -784 2374 -744ZM2599 0H2767V-51C2799 -16 2827 10 2883 10C2969 10 2991 -58 2991 -132V-500C2991 -608 2956 -660 2884 -660C2818 -660 2787 -618 2767 -576V-800H2599ZM2767 -172V-477C2767 -504 2772 -518 2793 -518C2814 -518 2819 -503 2819 -476V-173C2819 -146 2814 -131 2793 -131C2772 -131 2767 -145 2767 -172ZM3026 -223C3026 -55 3097 10 3224 10C3350 10 3422 -55 3422 -223V-239H3250V-180C3250 -144 3246 -130 3224 -130C3201 -130 3198 -144 3198 -180V-279H3422V-427C3422 -595 3350 -660 3224 -660C3097 -660 3026 -595 3026 -427ZM3198 -400V-470C3198 -506 3201 -520 3224 -520C3246 -520 3250 -506 3250 -470V-400Z"/></svg><span id="tm">&trade;</span></div>
       <div id="tag">Tiled terminals for vibe coders</div>
     </div>
 
     <div id="foot">
       <div id="track"><div id="bar"></div></div>
-      <div id="org"><b>Launch Industries</b><span id="ver"></span></div>
+      <div id="org">
+        <img src="splash/launch-wordmark-white.png" alt="Launch Industries">
+        <span id="ver"></span>
+      </div>
     </div>
   </div>
   <script>
