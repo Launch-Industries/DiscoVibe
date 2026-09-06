@@ -658,6 +658,45 @@ ipcMain.handle('pick-folder', async (event) => {
   return { ok: true, path: filePaths[0] };
 });
 
+// ===========================================================================
+// Dropped-file staging
+// ===========================================================================
+// A screenshot dragged straight off the macOS capture thumbnail lives under
+// .../T/TemporaryItems/NSIRD_screencaptureui_XXXX/. macOS reclaims that folder
+// as soon as the thumbnail flow ends, and sandboxing keeps other processes out
+// of it even before then, so a path pointing there is useless to whatever runs
+// in the terminal. The drop is the one moment the bytes are reachable: copy
+// them here and hand on this path instead.
+function droppedDir() {
+  const dir = path.join(app.getPath('userData'), 'dropped');
+  try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {}
+  return dir;
+}
+
+// A fortnight: long enough to reopen a screenshot from an earlier session,
+// short enough that the folder never turns into a junk drawer.
+const DROPPED_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
+function pruneDropped() {
+  let names;
+  const dir = droppedDir();
+  try { names = fs.readdirSync(dir); } catch (_) { return; }
+  const cutoff = Date.now() - DROPPED_MAX_AGE_MS;
+  for (const name of names) {
+    const file = path.join(dir, name);
+    try { if (fs.statSync(file).mtimeMs < cutoff) fs.unlinkSync(file); } catch (_) {}
+  }
+}
+
+ipcMain.handle('persist-dropped', async (_event, { name, data }) => {
+  try {
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    const safe = (String(name || '').replace(/[^\w.-]+/g, '-').replace(/^-+/, '').slice(-64)) || 'drop';
+    const filePath = path.join(droppedDir(), `${stamp}-${safe}`);
+    await fs.promises.writeFile(filePath, Buffer.from(data));
+    return { ok: true, filePath };
+  } catch (err) { return { ok: false, error: String(err.message || err) }; }
+});
+
 // Save a terminal's output to a file the user picks.
 ipcMain.handle('save-output', async (event, { name, text }) => {
   const win = BrowserWindow.fromWebContents(event.sender);
@@ -842,6 +881,8 @@ app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
     callback(true);
   });
+
+  pruneDropped();
 
   buildMenu();
   createSplash();

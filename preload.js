@@ -6,6 +6,9 @@ contextBridge.exposeInMainWorld('api', {
   // Resolve a dropped File to its absolute path (Electron 32+ removed File.path).
   getPathForFile: (file) => { try { return webUtils.getPathForFile(file); } catch (_) { return (file && file.path) || ''; } },
 
+  // Copy a dropped file's bytes somewhere durable and get back a stable path.
+  persistDropped: (name, data) => ipcRenderer.invoke('persist-dropped', { name, data }),
+
   // PTY
   spawn: (opts) => ipcRenderer.invoke('pty-spawn', opts),
   input: (id, data) => ipcRenderer.send('pty-input', { id, data }),

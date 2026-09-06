@@ -544,16 +544,59 @@ function createPane(opts = {}) {
   const hasFiles = (e) => e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files');
   termLayer.addEventListener('dragover', (e) => { if (hasFiles(e)) { e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = 'copy'; node.classList.add('file-drop'); } });
   termLayer.addEventListener('dragleave', (e) => { if (!termLayer.contains(e.relatedTarget)) node.classList.remove('file-drop'); });
-  termLayer.addEventListener('drop', (e) => {
+  // A path under the system temp tree is a loan, not an address. macOS stages a
+  // screenshot dragged off its capture thumbnail in .../TemporaryItems/ and takes
+  // it back moments later, so whatever reads the path afterwards finds nothing
+  // there. Files carrying no path at all (dragged out of a browser) are the same
+  // problem. The dropped File still holds the bytes right now, though, so copy
+  // them into DiscoVibe's own store and pass on that path instead.
+  const EPHEMERAL_RE = /(^|\/)TemporaryItems\/|^(\/private)?\/var\/folders\/|^\/tmp\//;
+  const shellQuote = (p) => "'" + p.replace(/'/g, "'\\''") + "'";
+  const resolveDropped = async (file) => {
+    const p = window.api.getPathForFile(file);
+    if (p && !EPHEMERAL_RE.test(p)) return p;               // a real file, in place: leave it there
+    try {
+      const r = await window.api.persistDropped(file.name || (p || '').split('/').pop(), await file.arrayBuffer());
+      if (r && r.ok) return r.filePath;
+    } catch (_) {}
+    return p;                                              // copy failed: the raw path still beats nothing
+  };
+
+  termLayer.addEventListener('drop', async (e) => {
     if (!hasFiles(e)) return;
     e.preventDefault(); e.stopPropagation();
     node.classList.remove('file-drop');
-    const paths = Array.from(e.dataTransfer.files).map((f) => window.api.getPathForFile(f)).filter(Boolean);
-    if (!paths.length) return;
-    const escaped = paths.map((p) => "'" + p.replace(/'/g, "'\\''") + "'").join(' ') + ' ';
-    window.api.input(id, escaped);
+    // dataTransfer empties once the handler yields, so take the list first.
+    const files = Array.from(e.dataTransfer.files);
+    if (!files.length) return;
     setFocused(id); term.focus(); pane.lastActivity = Date.now();
+    const paths = (await Promise.all(files.map(resolveDropped))).filter(Boolean);
+    if (!paths.length) return;
+    window.api.input(id, paths.map(shellQuote).join(' ') + ' ');
   });
+
+  // A screenshot taken with ⌘⌃⇧4 goes straight to the clipboard and never becomes
+  // a file at all, so there is nothing to drag and no path to paste. It arrives on
+  // ⌘V as an image instead. Stage those bytes exactly as a dropped file is staged
+  // and hand the terminal the resulting path.
+  const IMAGE_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/tiff': 'tiff', 'image/webp': 'webp' };
+  termLayer.addEventListener('paste', (e) => {
+    const items = Array.from((e.clipboardData && e.clipboardData.items) || []);
+    const item = items.find((it) => it.kind === 'file' && it.type.startsWith('image/'));
+    if (!item) return;                  // ordinary text: xterm's own paste already handles it
+    const file = item.getAsFile();
+    if (!file) return;
+    e.preventDefault(); e.stopPropagation();
+    setFocused(id); pane.lastActivity = Date.now();
+    (async () => {
+      try {
+        const r = await window.api.persistDropped('pasted-image.' + (IMAGE_EXT[item.type] || 'png'), await file.arrayBuffer());
+        if (!r || !r.ok) return flashMsg('Could not save the pasted image');
+        window.api.input(id, shellQuote(r.filePath) + ' ');
+        flashMsg('Image pasted ✓');
+      } catch (_) { flashMsg('Could not save the pasted image'); }
+    })();
+  }, true);                             // capture: beat xterm's own handler on the textarea
 
   // Companion browser
   const normalizeUrl = (v) => {
@@ -2562,7 +2605,22 @@ function handleSelectionKey(pane, e) {
   // want the raw sequence (vim visual mode, readline word motions).
   if (!e.shiftKey || e.altKey || !SELECT_KEYS.has(e.key)) return false;
 
-  if (!pane.selAnchor) { pane.selAnchor = bufferCursor(term); pane.selFocus = { ...pane.selAnchor }; }
+  // Seed the anchor. A selection already on screen is what the person means to
+  // extend (double-click a word, then Shift+Down), so grow that: the edge the
+  // arrow moves away from becomes the anchor and the near edge starts moving.
+  // Only with nothing selected does the terminal cursor become the origin.
+  if (!pane.selAnchor) {
+    const sel = (term.getSelectionPosition && term.getSelectionPosition()) || null;
+    if (sel) {
+      const back = e.key === 'ArrowLeft' || e.key === 'ArrowUp' || e.key === 'Home';
+      const lo = { col: sel.start.x, row: sel.start.y }, hi = { col: sel.end.x, row: sel.end.y };
+      pane.selAnchor = clampPos(term, back ? hi : lo);
+      pane.selFocus = clampPos(term, back ? lo : hi);
+    } else {
+      pane.selAnchor = bufferCursor(term);
+      pane.selFocus = { ...pane.selAnchor };
+    }
+  }
   const f = { ...pane.selFocus };
   const jump = e.metaKey || e.ctrlKey;   // Shift+Cmd+Up/Down reaches the ends
   if (e.key === 'ArrowLeft') f.col -= 1;

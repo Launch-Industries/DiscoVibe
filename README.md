@@ -29,6 +29,8 @@ Launch from Spotlight / Launchpad. If macOS blocks it (unsigned build), right-cl
 - **Multi-monitor** — ⌘D opens a window on every display, each filling its screen and tiling independently
 - **Per-pane color + guaranteed legibility** — WCAG ≥4.5:1 contrast enforced on every background
 - **Drag files from Finder** → shell-escaped path inserted at cursor
+- **Drag a fresh screenshot** → staged out of the macOS capture folder on drop, so the path still resolves after the thumbnail goes away
+- **Paste an image** (⌘V) → saved and its path inserted, so ⌘⌃⇧4 straight to the clipboard works too
 - **Drag-and-drop reorder** — drag a pane by its grip handle
 - **Collapse / store panes** — park a running terminal in the tray, restore it any time
 - **Auto-collapse** — idle panes collapse after a configurable timeout (default 30 min)
@@ -61,6 +63,7 @@ Launch from Spotlight / Launchpad. If macOS blocks it (unsigned build), right-cl
 | Save output | ⌘S |
 | Collapse / store | ⌘⇧S |
 | Close all (killswitch) | ⌘⇧K |
+| Extend selection | Shift+Arrows (from the cursor, or from a double-clicked word) |
 | Cycle panes | Ctrl+Tab / Ctrl+Shift+Tab |
 | Next / previous pane | ⌘] / ⌘[ |
 | Span displays | ⌘D |
