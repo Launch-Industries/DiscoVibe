@@ -7,3 +7,8 @@ license-signing-key.private.pem
 .env.notarize
 
 supabase/.temp/
+
+# Editor snapshots (renderer.js.bak2.135241 and friends)
+*.bak
+*.bak[0-9]*
+*.bak.*
