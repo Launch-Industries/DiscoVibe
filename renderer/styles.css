@@ -573,3 +573,17 @@ body.dim-inactive .pane:not(.focused) .pane-body { filter: brightness(var(--dim-
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
   color: #66718a; font-size: 14px; text-align: center; pointer-events: none;
 }
+
+/* Right-click menu inside a terminal pane (Copy / Paste / Select All). */
+.ctx-menu { min-width: 190px; padding: 6px; }
+.ctx-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 18px;
+  width: 100%; text-align: left; cursor: pointer;
+  background: transparent; border: 0; border-radius: 6px;
+  color: var(--chrome-fg); font: inherit; font-size: 13px;
+  padding: 7px 9px;
+}
+.ctx-item:hover:not(:disabled) { background: var(--btn-bg-hover); }
+.ctx-item:disabled { opacity: .38; cursor: default; }
+.ctx-hint { opacity: .5; font-size: 11px; font-variant-numeric: tabular-nums; }
+.ctx-sep { height: 1px; background: var(--pop-line); margin: 5px 4px; }

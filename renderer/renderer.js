@@ -525,11 +525,35 @@ function createPane(opts = {}) {
 
   // If a drag gets swallowed by the program's mouse reporting, say so once per
   // pane rather than leaving the person to guess why nothing highlighted.
+  // Capture phase, both of them. While a program has mouse tracking on, xterm
+  // handles the event and calls cancel(), which is preventDefault + STOP
+  // PROPAGATION -- so a bubble-phase listener here never ran, and the hint below
+  // could never fire in the one situation it exists for. Capture runs first.
   let selectHintShown = false, dragStartX = 0, dragStartY = 0;
   termLayer.addEventListener('mousedown', (ev) => {
     dragStartX = ev.clientX; dragStartY = ev.clientY;
     if (pane.selAnchor) clearKeyboardSelection(pane);   // the drag owns the selection now
-  });
+  }, true);
+
+  // Right-click menu. Option+drag already selects through mouse tracking, but
+  // nothing advertises that, so copy/paste looked broken. This works whatever
+  // the running program is doing with the mouse.
+  termLayer.addEventListener('contextmenu', (ev) => {
+    ev.preventDefault(); ev.stopPropagation();
+    const sel = (term.hasSelection && term.hasSelection()) ? term.getSelection() : '';
+    openContextMenu(ev.clientX, ev.clientY, [
+      { label: 'Copy', hint: '\u2318C', disabled: !sel, run: () => {
+          navigator.clipboard.writeText(sel).catch(() => {}); pushClip(sel); } },
+      // term.paste keeps the \e[200~ bracketed-paste framing. Writing straight to
+      // the pty skips it and breaks multi-line pastes into Claude Code.
+      { label: 'Paste', hint: '\u2318V', run: async () => {
+          try { const t = await navigator.clipboard.readText(); if (t) term.paste(t); } catch (_) {} } },
+      { sep: true },
+      { label: 'Select All', run: () => term.selectAll() },
+      { label: 'Clear Screen', run: () => term.clear() },
+    ]);
+  }, true);
+
   termLayer.addEventListener('mouseup', (ev) => {
     if (selectHintShown || ev.altKey) return;
     if (term.hasSelection && term.hasSelection()) return;
@@ -537,8 +561,8 @@ function createPane(opts = {}) {
     if (!tracking || tracking === 'none') return;
     if (Math.abs(ev.clientX - dragStartX) < 12 && Math.abs(ev.clientY - dragStartY) < 12) return;
     selectHintShown = true;
-    flashMsg('Hold ⌥ Option to select text while this program is using the mouse');
-  });
+    flashMsg('Hold ⌥ Option to select text, or right-click for Copy');
+  }, true);
 
   // Drag & drop files from Finder → insert their shell-escaped paths at the cursor.
   const hasFiles = (e) => e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files');
@@ -945,6 +969,34 @@ function openPopover(anchor, contentEl) {
   let top = r.bottom + 6;
   if (top + ph > window.innerHeight - 8) top = Math.max(8, r.top - ph - 6);
   pop.style.left = left + 'px'; pop.style.top = top + 'px';
+  pop.style.visibility = 'visible';
+  openPop = pop;
+  setTimeout(() => document.addEventListener('mousedown', onOutside, true), 0);
+  return pop;
+}
+
+// A right-click menu positioned at the pointer. The popover helper above anchors
+// to an element, which a context menu cannot do. Reuses .popover styling and the
+// same outside-click dismissal.
+function openContextMenu(x, y, items) {
+  closePopover();
+  const pop = document.createElement('div');
+  pop.className = 'popover ctx-menu';
+  for (const it of items) {
+    if (it.sep) { const hr = document.createElement('div'); hr.className = 'ctx-sep'; pop.appendChild(hr); continue; }
+    const b = document.createElement('button');
+    b.className = 'ctx-item';
+    b.appendChild(document.createTextNode(it.label));
+    if (it.hint) { const h = document.createElement('span'); h.className = 'ctx-hint'; h.textContent = it.hint; b.appendChild(h); }
+    if (it.disabled) b.disabled = true;
+    else b.addEventListener('click', () => { closePopover(); it.run(); });
+    pop.appendChild(b);
+  }
+  document.body.appendChild(pop);
+  pop.style.visibility = 'hidden';
+  const pw = pop.offsetWidth, ph = pop.offsetHeight;
+  pop.style.left = Math.max(8, Math.min(x, window.innerWidth - pw - 8)) + 'px';
+  pop.style.top = Math.max(8, Math.min(y, window.innerHeight - ph - 8)) + 'px';
   pop.style.visibility = 'visible';
   openPop = pop;
   setTimeout(() => document.addEventListener('mousedown', onOutside, true), 0);
