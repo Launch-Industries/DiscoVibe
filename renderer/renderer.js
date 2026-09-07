@@ -451,6 +451,7 @@ function createPane(opts = {}) {
     note: opts.note || '', manualName: opts.manual !== undefined ? !!opts.manual : !!opts.name, noteBtn,
     collapsed: false, attnTimer: null, chimeCount: 0, lastActivity: Date.now(), lastKeypress: 0,
     selAnchor: null, selFocus: null,   // keyboard-selection endpoints, absolute buffer coords
+    lastSelection: '',                 // survives a repaint wiping the live selection
     cwd: opts.cwd || settings.projectsDir || '',   // updated by OSC 7 or cd detection
     detectedTool: opts.aiTool || null,
     // The exact Claude conversation this pane is running. Persisted with the
@@ -517,10 +518,17 @@ function createPane(opts = {}) {
 
   // Copy-on-select: the selection reaches the clipboard the moment you finish the
   // drag, so releasing the mouse or clicking away can't lose it.
+  // A TUI that repaints -- Claude Code does, constantly -- makes xterm drop the
+  // selection almost as soon as the mouse comes up. The highlight vanishing is
+  // not the text being lost, so remember the last real selection and let Copy
+  // fall back to it. Without this there is genuinely no way to copy from a pane
+  // running Claude: you select, it clears, and the menu has nothing to offer.
   term.onSelectionChange(() => {
-    if (settings.copyOnSelect === false) return;
     const text = term.getSelection();
-    if (text && text.trim()) navigator.clipboard.writeText(text).catch(() => {});
+    if (!text || !text.trim()) return;      // clearing is not a new selection
+    pane.lastSelection = text;
+    if (settings.copyOnSelect === false) return;
+    navigator.clipboard.writeText(text).catch(() => {});
   });
 
   // If a drag gets swallowed by the program's mouse reporting, say so once per
@@ -540,9 +548,10 @@ function createPane(opts = {}) {
   // the running program is doing with the mouse.
   termLayer.addEventListener('contextmenu', (ev) => {
     ev.preventDefault(); ev.stopPropagation();
-    const sel = (term.hasSelection && term.hasSelection()) ? term.getSelection() : '';
+    const live = (term.hasSelection && term.hasSelection()) ? term.getSelection() : '';
+    const sel = live || pane.lastSelection || '';
     openContextMenu(ev.clientX, ev.clientY, [
-      { label: 'Copy', hint: '\u2318C', disabled: !sel, run: () => {
+      { label: live ? 'Copy' : 'Copy Last Selection', hint: '\u2318C', disabled: !sel, run: () => {
           navigator.clipboard.writeText(sel).catch(() => {}); pushClip(sel); } },
       // term.paste keeps the \e[200~ bracketed-paste framing. Writing straight to
       // the pty skips it and breaks multi-line pastes into Claude Code.
@@ -2709,11 +2718,17 @@ function copyFocusedSelection() {
     return;
   }
   const pane = focusedPane();
-  if (pane && pane.term.hasSelection && pane.term.hasSelection()) {
-    const sel = pane.term.getSelection();
-    navigator.clipboard.writeText(sel).then(() => flashMsg('Copied ✓')).catch(() => {});
-    pushClip(sel);
-    return;
+  if (pane) {
+    // hasSelection() is often already false by the time this runs: a repainting
+    // TUI wipes the live selection within a frame of the mouse coming up. Fall
+    // back to the last real selection so Cmd+C still copies what was highlighted.
+    const live = pane.term.hasSelection && pane.term.hasSelection() ? pane.term.getSelection() : '';
+    const sel = live || pane.lastSelection || '';
+    if (sel) {
+      navigator.clipboard.writeText(sel).then(() => flashMsg('Copied ✓')).catch(() => {});
+      pushClip(sel);
+      return;
+    }
   }
   // Fall back to any regular page selection (transcript viewer, popovers).
   const sel = String(window.getSelection() || '');
