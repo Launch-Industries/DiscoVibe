@@ -343,6 +343,97 @@ function writeSessionStatus(map) {
   try { fs.writeFileSync(sessionStatusPath(), JSON.stringify(map, null, 2), 'utf8'); } catch (_) {}
 }
 
+// The name YOU gave the pane, kept against the session id.
+//
+// Claude Code never sees a pane's name, so the outstanding-work list could only
+// ever show Claude's own ai-title. "Sound Transit" is what you actually search
+// for, so store it here and fold it in when the list is built. Kept beside the
+// app's other data; nothing is ever written into Claude's files.
+function sessionNamesPath() {
+  return path.join(app.getPath('userData'), 'session-names.json');
+}
+function readSessionNames() {
+  try { return JSON.parse(fs.readFileSync(sessionNamesPath(), 'utf8')) || {}; } catch (_) { return {}; }
+}
+function writeSessionNames(map) {
+  try { fs.writeFileSync(sessionNamesPath(), JSON.stringify(map, null, 2), 'utf8'); } catch (_) {}
+}
+
+// ---- Which Claude conversation is running in a pane -------------------------
+// Guessing "the most recent session in this folder that no other pane claimed"
+// mis-assigns as soon as two panes share a directory, which is the normal case:
+// it pinned the Speed Issues conversation onto the Tally pane, so the saved
+// resume command reopened the wrong work. A pane's own recorded output settles
+// it instead. Claude Code prints its scratchpad path,
+// /private/tmp/claude-<uid>/<project>/<session-id>/scratchpad, and that text can
+// only have come out of this pane's PTY.
+const UUID_SRC = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+
+function scanForSessionId(text, projectDirName) {
+  const clean = String(text).replace(/\u0000/g, '');
+  const scratch = new RegExp('claude-\\d+/([^/\\s]+)/(' + UUID_SRC + ')/scratchpad', 'g');
+  const hits = [];
+  for (const m of clean.matchAll(scratch)) {
+    // A path for some other project printed in this pane proves nothing.
+    if (projectDirName && m[1] !== projectDirName) continue;
+    hits.push(m[2]);
+  }
+  // Last wins: a pane that resumed mid-session has moved on to a newer id.
+  if (hits.length) return { id: hits[hits.length - 1], confidence: 'high' };
+  // Weaker fallback: an explicit resume seen in this pane, but only when it is
+  // unambiguous. A pane that merely discussed other conversations names several,
+  // and picking one of those is how the old guess went wrong in the first place.
+  const flag = new RegExp('--(?:resume|session-id)[=\\s]+(' + UUID_SRC + ')', 'g');
+  const ids = [...new Set([...clean.matchAll(flag)].map((m) => m[1]))];
+  if (ids.length === 1) return { id: ids[0], confidence: 'medium' };
+  return null;
+}
+
+function readFileSlice(file, fromEnd, bytes) {
+  let size = 0;
+  try { size = fs.statSync(file).size; } catch (_) { return ''; }
+  const len = Math.min(size, bytes);
+  if (len <= 0) return '';
+  const pos = fromEnd ? size - len : 0;
+  let fd;
+  try { fd = fs.openSync(file, 'r'); } catch (_) { return ''; }
+  const buf = Buffer.alloc(len);
+  try { fs.readSync(fd, buf, 0, len, pos); } finally { try { fs.closeSync(fd); } catch (_) {} }
+  return buf.toString('utf8');
+}
+
+// The renderer asks every few seconds per pane, so cache on file size: with no
+// new output there is nothing new to find and the answer cannot have changed.
+const sessionScanCache = new Map();     // paneId -> { size, result }
+
+ipcMain.handle('session-id-scan', (_e, { paneId, cwd } = {}) => {
+  const rec = transcripts.get(paneId);
+  if (!rec || !rec.logPath) return null;
+  let size = 0;
+  try { size = fs.statSync(rec.logPath).size; } catch (_) { return null; }
+  const cached = sessionScanCache.get(paneId);
+  if (cached && cached.size === size) return cached.result;
+
+  const dir = claudeProjectDir(cwd);
+  const projectDirName = dir ? path.basename(dir) : '';
+  let found = scanForSessionId(readFileSlice(rec.logPath, true, 2 * 1024 * 1024), projectDirName);
+  if (!found) found = scanForSessionId(readFileSlice(rec.logPath, false, 1024 * 1024), projectDirName);
+  // Only trust an id that really is a conversation in this pane's folder.
+  if (found && dir && !fs.existsSync(path.join(dir, found.id + '.jsonl'))) found = null;
+  sessionScanCache.set(paneId, { size, result: found });
+  return found;
+});
+
+ipcMain.handle('session-name', (_e, { id, name, cwd, color } = {}) => {
+  if (!id) return { ok: false };
+  const map = readSessionNames();
+  const clean = String(name || '').trim();
+  if (!clean) delete map[id];
+  else map[id] = { name: clean.slice(0, 80), cwd: cwd || '', color: color || '', updatedAt: new Date().toISOString() };
+  writeSessionNames(map);
+  return { ok: true };
+});
+
 // Read a slice from each end rather than the whole file: these run to tens of
 // megabytes, the title/prompt records are rewritten as the session goes so the
 // newest are near the end, and the opening user message is a good fallback
@@ -396,6 +487,7 @@ function readSessionMeta(file) {
 ipcMain.handle('session-index', () => {
   const root = path.join(os.homedir(), '.claude', 'projects');
   const status = readSessionStatus();
+  const names = readSessionNames();
   const out = [];
   let dirs;
   try { dirs = fs.readdirSync(root); } catch (_) { return { host: os.hostname(), sessions: [] }; }
@@ -406,7 +498,9 @@ ipcMain.handle('session-index', () => {
       const m = readSessionMeta(path.join(root, d, f));
       if (!m) continue;
       const st = status[m.id] || null;
+      const nm = names[m.id] || null;
       out.push({ ...m, projectDir: d, host: os.hostname(),
+                 paneName: nm && nm.name ? nm.name : '',
                  completedAt: st && st.completedAt ? st.completedAt : null });
     }
   }
@@ -779,6 +873,7 @@ function buildMenu() {
         { type: 'separator' },
         { label: 'Save Terminal Output…', accelerator: 'CmdOrCtrl+S', click: () => sendToFocused('save-output') },
         { label: 'Clear Terminal', accelerator: 'CmdOrCtrl+K', click: () => sendToFocused('clear') },
+        { label: 'Repaint Terminals (fix a blank pane)', accelerator: 'CmdOrCtrl+Shift+P', click: () => sendToFocused('repaint') },
         { label: 'Collapse / Store Terminal', accelerator: 'CmdOrCtrl+Shift+S', click: () => sendToFocused('collapse') },
         { label: 'Next Terminal', accelerator: 'CmdOrCtrl+]', click: () => sendToFocused('next') },
         { label: 'Previous Terminal', accelerator: 'CmdOrCtrl+[', click: () => sendToFocused('prev') },

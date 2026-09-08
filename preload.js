@@ -30,6 +30,9 @@ contextBridge.exposeInMainWorld('api', {
   revealTranscript: (base) => ipcRenderer.invoke('reveal-transcript', { base }),
   transcriptMeta: (id, patch) => ipcRenderer.send('transcript-meta', { id, patch }),
   claudeSessions: (cwd) => ipcRenderer.invoke('claude-sessions', { cwd }),
+  // Which conversation is really running in this pane, read from its own output
+  sessionIdScan: (paneId, cwd) => ipcRenderer.invoke('session-id-scan', { paneId, cwd }),
+  sessionName: (id, name, cwd, color) => ipcRenderer.invoke('session-name', { id, name, cwd, color }),
   // Outstanding-work tracker
   sessionIndex: () => ipcRenderer.invoke('session-index'),
   sessionComplete: (id, completed) => ipcRenderer.invoke('session-complete', { id, completed }),

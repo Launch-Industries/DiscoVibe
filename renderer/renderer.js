@@ -280,13 +280,43 @@ function attachWebgl(term) {
   let addon;
   try { addon = new WebglAddon.WebglAddon(); } catch (_) { return null; }
   try {
-    addon.onContextLoss(() => { try { addon.dispose(); } catch (_) {} });
+    addon.onContextLoss(() => {
+      // Disposing swaps the DOM renderer back in and asks it to resize, but
+      // xterm turns that follow-up full refresh into a no-op whenever its render
+      // service is paused. The pane is then live and painting nothing: the shell
+      // keeps running, the bell keeps ringing, and the screen stays empty. So
+      // repaint from the buffer explicitly once the swap has happened.
+      try { addon.dispose(); } catch (_) {}
+      requestAnimationFrame(() => {
+        try { term.refresh(0, Math.max(0, term.rows - 1)); } catch (_) {}
+      });
+    });
     term.loadAddon(addon);
   } catch (_) {
     try { addon.dispose(); } catch (_) {}
     return null;
   }
   return addon;
+}
+
+// Force a pane to paint what its buffer already holds.
+//
+// Nothing here touches the shell, so it is always safe to run: the PTY, the
+// scrollback and the running program are untouched. The dead GPU renderer is
+// dropped and NOT replaced, because a context that just died under contention
+// will die again; xterm's DOM renderer is slower and always paints.
+function repaintPanes(list) {
+  const targets = (list && list.length) ? list : [...panes];
+  for (const p of targets) {
+    try {
+      if (p.webgl) { try { p.webgl.dispose(); } catch (_) {} p.webgl = null; }
+      p.fitAddon.fit();
+      p.term.refresh(0, Math.max(0, p.term.rows - 1));
+      const { cols, rows } = p.term;
+      if (cols > 0 && rows > 0) window.api.resize(p.id, cols, rows);
+    } catch (_) {}
+  }
+  flashMsg(targets.length === 1 ? 'Repainted this terminal' : 'Repainted ' + targets.length + ' terminals');
 }
 
 function relayout() {
@@ -458,6 +488,9 @@ function createPane(opts = {}) {
     // layout so a crash can resume THIS pane's session rather than whatever
     // happened to be most recent in the directory.
     aiSessionId: opts.aiSessionId || '',
+    // Set once the id came from the pane's own output, so the folder-level guess
+    // can never overwrite a known-good binding.
+    aiSessionLocked: !!opts.aiLocked,
     aiName: opts.aiName || '',
   };
   // OSC 7: shell emits \x1b]7;file:///path\x07 after each prompt — track current directory
@@ -714,6 +747,7 @@ function createPane(opts = {}) {
   nameInput.addEventListener('change', () => {
     pane.name = nameInput.value; pane.manualName = true;
     window.api.transcriptMeta(id, { name: pane.name });
+    rememberSessionName(pane);          // so Outstanding work can be searched by it
     scheduleSave();
   });
   nameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { nameInput.blur(); term.focus(); } });
@@ -880,6 +914,10 @@ function collapsePane(pane, silent) {
   pane.collapsed = true;
   clearAttention(pane);
   storedHost.appendChild(pane.el);     // keep alive, out of layout
+  // #stored-host is display:none, so this pane paints nothing while stored. Give
+  // its GPU context back rather than holding one of a capped number for a pane
+  // nobody can see; visible panes are what need them.
+  if (pane.webgl) { try { pane.webgl.dispose(); } catch (_) {} pane.webgl = null; }
   if (focusedId === pane.id && panes.length) {
     setFocused(panes[Math.max(0, i - 1)].id);
     setTimeout(() => { const f = panes.find((p) => p.id === focusedId); if (f) f.term.focus(); }, 30);
@@ -897,7 +935,12 @@ function restorePane(pane) {
   renderTray();
   relayout();
   setFocused(pane.id);
-  setTimeout(() => { fitPane(pane); pane.term.focus(); }, 30);
+  setTimeout(() => {
+    if (!pane.webgl) pane.webgl = attachWebgl(pane.term);   // visible again, so GPU again
+    fitPane(pane);
+    try { pane.term.refresh(0, Math.max(0, pane.term.rows - 1)); } catch (_) {}
+    pane.term.focus();
+  }, 30);
   scheduleSave();
 }
 function renderTray() {
@@ -1324,26 +1367,65 @@ setInterval(() => {
 
 // Bind each Claude pane to one specific conversation file.
 //
-// Several panes commonly share a cwd (four panes all in ~ is the normal case),
+// Several panes commonly share a cwd (eight panes all in ~ is the normal case)
 // and Claude writes one .jsonl per conversation in that directory's project
-// folder. Newest-first, we hand each unbound pane the most recent session no
-// other pane has already taken, so four panes end up on four conversations
-// instead of four copies of one.
+// folder, so a folder alone cannot say which conversation a pane is running.
+// Handing out "the most recent session no other pane claimed" therefore guesses,
+// and it guessed wrong: the Tally pane ended up holding the Speed Issues id, so
+// its saved resume command reopened the wrong work.
+//
+// The pane's own recorded output is asked first and settles it outright, because
+// Claude prints its scratchpad path and that text can only have come from this
+// pane's PTY. The old guess survives only for panes that have not yet printed
+// anything identifying, and is corrected as soon as they do.
 let claimBusy = false;
+const SCAN_EVERY_MS = 20000;
 async function claimClaudeSessions() {
   if (claimBusy) return;
-  const need = panes.filter((p) => p.detectedTool === 'claude' && !p.aiSessionId && p.cwd);
+  const now = Date.now();
+  // Panes that never print an identifying path would otherwise be re-read every
+  // interval forever, so ease off after each miss and settle at about 2 minutes.
+  const need = panes.filter((p) => p.detectedTool === 'claude' && p.cwd && !p.aiSessionLocked
+    && (!p._scanAt || now - p._scanAt > SCAN_EVERY_MS * Math.min(6, 1 + (p._scanMisses || 0))));
   if (!need.length) return;
   claimBusy = true;
   try {
     const byCwd = new Map();
     for (const p of need) {
+      p._scanAt = Date.now();
+      // 1. This pane's own output. Authoritative.
+      let scan = null;
+      try { scan = await window.api.sessionIdScan(p.id, p.cwd); } catch (_) {}
+      if (scan && scan.id) {
+        p._scanMisses = 0;
+        if (scan.id !== p.aiSessionId) { p.aiSessionId = scan.id; scheduleSave(); }
+        if (scan.confidence === 'high') p.aiSessionLocked = true;
+        rememberSessionName(p);
+        continue;
+      }
+      p._scanMisses = (p._scanMisses || 0) + 1;
+      // 2. Already carrying a guess: leave it rather than re-rolling the dice.
+      if (p.aiSessionId) { rememberSessionName(p); continue; }
+      // 3. Nothing to go on yet. Guess, and correct it once output arrives.
       if (!byCwd.has(p.cwd)) byCwd.set(p.cwd, await window.api.claudeSessions(p.cwd));
       const taken = new Set([...panes, ...stored].map((x) => x.aiSessionId).filter(Boolean));
       const free = (byCwd.get(p.cwd) || []).find((sess) => !taken.has(sess.id));
-      if (free) { p.aiSessionId = free.id; scheduleSave(); }
+      if (free) { p.aiSessionId = free.id; scheduleSave(); rememberSessionName(p); }
     }
   } catch (_) {} finally { claimBusy = false; }
+}
+
+// The name YOU gave the pane is what you actually search by ("Sound Transit"),
+// and Claude never sees it, so file it against the session id. Default names
+// are skipped: "Terminal 14" helps nobody find anything.
+function rememberSessionName(pane) {
+  if (!pane || !pane.aiSessionId) return;
+  const name = ((pane.nameInput ? pane.nameInput.value : '') || pane.name || '').trim();
+  if (!name || /^Terminal \d+$/i.test(name)) return;
+  const stamp = pane.aiSessionId + '|' + name;
+  if (pane._namedAs === stamp) return;              // already filed under this pair
+  pane._namedAs = stamp;
+  try { window.api.sessionName(pane.aiSessionId, name, pane.cwd || '', pane.color || ''); } catch (_) {}
 }
 
 let autoNameBusy = false;
@@ -1819,6 +1901,11 @@ async function openWorkTracker() {
   sub.textContent = 'Unfinished Claude sessions, newest first.';
   card.append(head, sub);
 
+  const search = document.createElement('input'); search.type = 'search';
+  search.placeholder = 'Search your terminal names, titles, folders, and last prompts…';
+  search.style.cssText = 'width:100%;background:var(--btn-bg);color:inherit;border:1px solid var(--pop-line);border-radius:8px;padding:8px;font:inherit;font-size:13px;box-sizing:border-box;margin-bottom:10px;';
+  card.appendChild(search);
+
   const list = document.createElement('div'); list.className = 'rec-list';
   card.appendChild(list);
 
@@ -1863,7 +1950,13 @@ async function openWorkTracker() {
 
   const render = () => {
     const all = data.sessions || [];
-    const shown = all.filter((x) => (workShowDone ? x.completedAt : !x.completedAt));
+    const q = search.value.trim().toLowerCase();
+    const hit = (x) => !q
+      || (x.paneName || '').toLowerCase().includes(q)
+      || (x.title || '').toLowerCase().includes(q)
+      || (x.cwd || '').toLowerCase().includes(q)
+      || (x.lastPrompt || '').toLowerCase().includes(q);
+    const shown = all.filter((x) => (workShowDone ? x.completedAt : !x.completedAt)).filter(hit);
     const doneCount = all.filter((x) => x.completedAt).length;
     toggle.textContent = workShowDone ? `← Outstanding (${all.length - doneCount})` : `Show completed (${doneCount})`;
     list.innerHTML = '';
@@ -1877,8 +1970,20 @@ async function openWorkTracker() {
       const row = document.createElement('div'); row.className = 'rec-row';
       const info = document.createElement('div'); info.className = 'rec-info';
 
+      // Your name for the pane leads, since that is what you remember it by.
+      // Claude's own title trails it, because the two rarely say the same thing.
       const title = document.createElement('div'); title.className = 'rec-name';
-      title.textContent = sess.title || 'Untitled session';
+      if (sess.paneName) {
+        title.textContent = sess.paneName;
+        if (sess.title && norm(sess.title) !== norm(sess.paneName)) {
+          const alt = document.createElement('span'); alt.className = 'ai-name';
+          alt.style.marginLeft = '8px';
+          alt.textContent = sess.title;
+          title.appendChild(alt);
+        }
+      } else {
+        title.textContent = sess.title || 'Untitled session';
+      }
       const meta = document.createElement('div'); meta.className = 'rec-meta';
       const where = (sess.cwd || '').replace(/^\/Users\/[^/]+/, '~');
       const elsewhere = sess.host && data.host && sess.host !== data.host;
@@ -1897,7 +2002,7 @@ async function openWorkTracker() {
       else {
         open.title = 'New terminal running claude --resume';
         open.addEventListener('click', () => {
-          const p = addPane({ name: sess.title ? sess.title.slice(0, 24) : '', cwd: sess.cwd });
+          const p = addPane({ name: sess.paneName || (sess.title ? sess.title.slice(0, 24) : ''), cwd: sess.cwd });
           if (p) {
             p.aiSessionId = sess.id; p.detectedTool = 'claude'; scheduleSave();
             setTimeout(() => window.api.input(p.id, buildResumeCmd('claude', sess.cwd, sess.id) + '\r'), 700);
@@ -1924,7 +2029,9 @@ async function openWorkTracker() {
     renderIcons();
   };
   toggle.addEventListener('click', () => { workShowDone = !workShowDone; render(); renderIcons(); });
+  search.addEventListener('input', () => { render(); renderIcons(); });
   render();
+  search.focus();
 }
 
 // Read a recorded session back, with select-all + copy that actually work.
@@ -2289,7 +2396,8 @@ function paneConfig(p, collapsed) {
   return { name: p.nameInput.value || p.name, color: p.color, bellOn: p.bellOn,
     webUrl: p.webUrl || '', note: p.note || '', manual: !!p.manualName, collapsed: !!collapsed,
     cwd: p.cwd || '', aiName: p.aiName || '',
-    aiTool: p.detectedTool || '', aiSessionId: p.aiSessionId || '' };
+    aiTool: p.detectedTool || '', aiSessionId: p.aiSessionId || '',
+    aiLocked: !!p.aiSessionLocked };
 }
 function serializePanes() {
   return [...panes.map((p) => paneConfig(p, false)), ...stored.map((p) => paneConfig(p, true))];
@@ -2759,6 +2867,7 @@ window.api.onMenu((action) => {
   else if (action === 'reopen-closed') reopenClosed();
   else if (action === 'kill-all') killAll();
   else if (action === 'clear') { const p = focusedPane(); if (p) { p.term.clear(); p.term.focus(); } }
+  else if (action === 'repaint') repaintPanes();
   else if (action === 'collapse') { const p = focusedPane(); if (p) collapsePane(p); }
   else if (action === 'next') cyclePane(1);
   else if (action === 'prev') cyclePane(-1);
