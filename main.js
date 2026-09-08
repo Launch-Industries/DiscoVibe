@@ -584,16 +584,53 @@ ipcMain.handle('session-complete', (_e, { id, completed } = {}) => {
   return { ok: true };
 });
 
+// readSessionMeta reads two 256KB slices per file and a busy folder holds dozens
+// of conversations, so cache each one on size+mtime: an untouched transcript
+// cannot have changed its title.
+const sessionMetaCache = new Map();   // file -> { size, mtime, meta }
+function readSessionMetaCached(file) {
+  let st;
+  try { st = fs.statSync(file); } catch (_) { sessionMetaCache.delete(file); return null; }
+  const hit = sessionMetaCache.get(file);
+  if (hit && hit.size === st.size && hit.mtime === st.mtimeMs) return hit.meta;
+  const meta = readSessionMeta(file);
+  if (meta) sessionMetaCache.set(file, { size: st.size, mtime: st.mtimeMs, meta });
+  return meta;
+}
+
+// Titles come back with the list. Claude Code sets the terminal title to its own
+// conversation title, so the title is what lets a pane recognise its own
+// conversation instead of guessing at the folder's newest one.
 ipcMain.handle('claude-sessions', (_e, { cwd } = {}) => {
   const dir = claudeProjectDir(cwd);
   if (!dir) return [];
   let files;
   try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.jsonl')); } catch (_) { return []; }
   return files.map((f) => {
-    let mtime = 0;
-    try { mtime = fs.statSync(path.join(dir, f)).mtimeMs; } catch (_) {}
-    return { id: f.slice(0, -6), mtime };
+    const meta = readSessionMetaCached(path.join(dir, f));
+    return { id: f.slice(0, -6), mtime: meta ? meta.mtime : 0, title: meta ? meta.title : '' };
   }).sort((a, b) => b.mtime - a.mtime);
+});
+
+// "Do these conversations still exist, and what are they called?" for a handful
+// of ids the caller already knows. Restoring a window needs exactly this, for
+// its own panes, before it types `claude --resume` at anything; session-index
+// reads every project on the machine, which is far too much work at boot.
+// A missing id is simply absent from the answer.
+ipcMain.handle('claude-session-meta', (_e, { cwd, ids } = {}) => {
+  const out = {};
+  const dir = claudeProjectDir(cwd);
+  if (!dir || !Array.isArray(ids)) return out;
+  const names = readSessionNames();
+  for (const id of ids.slice(0, 60)) {
+    if (!new RegExp('^' + UUID_SRC + '$').test(String(id))) continue;
+    const meta = readSessionMetaCached(path.join(dir, id + '.jsonl'));
+    if (!meta) continue;
+    const nm = names[id];
+    out[id] = { id, title: meta.title || '', lastPrompt: meta.lastPrompt || '',
+                mtime: meta.mtime, paneName: nm && nm.name ? nm.name : '' };
+  }
+  return out;
 });
 
 ipcMain.handle('list-transcripts', () => {
@@ -869,6 +906,7 @@ function buildMenu() {
         { label: 'Close Terminal', accelerator: 'CmdOrCtrl+W', click: () => sendToFocused('close-terminal') },
         { label: 'Reopen Closed Terminal', accelerator: 'CmdOrCtrl+Shift+T', click: () => sendToFocused('reopen-closed') },
         { label: 'Recover Session…', accelerator: 'CmdOrCtrl+Shift+R', click: () => sendToFocused('recover-sessions') },
+        { label: 'Resume All Conversations', accelerator: 'CmdOrCtrl+Shift+O', click: () => sendToFocused('resume-all') },
         { label: 'Close ALL Terminals (Killswitch)', accelerator: 'CmdOrCtrl+Shift+K', click: () => sendToFocused('kill-all') },
         { type: 'separator' },
         { label: 'Save Terminal Output…', accelerator: 'CmdOrCtrl+S', click: () => sendToFocused('save-output') },

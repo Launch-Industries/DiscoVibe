@@ -30,6 +30,8 @@ contextBridge.exposeInMainWorld('api', {
   revealTranscript: (base) => ipcRenderer.invoke('reveal-transcript', { base }),
   transcriptMeta: (id, patch) => ipcRenderer.send('transcript-meta', { id, patch }),
   claudeSessions: (cwd) => ipcRenderer.invoke('claude-sessions', { cwd }),
+  // Titles for a known handful of conversations, without scanning every project
+  claudeSessionMeta: (cwd, ids) => ipcRenderer.invoke('claude-session-meta', { cwd, ids }),
   // Which conversation is really running in this pane, read from its own output
   sessionIdScan: (paneId, cwd) => ipcRenderer.invoke('session-id-scan', { paneId, cwd }),
   sessionName: (id, name, cwd, color) => ipcRenderer.invoke('session-name', { id, name, cwd, color }),

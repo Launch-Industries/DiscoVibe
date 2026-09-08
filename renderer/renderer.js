@@ -38,7 +38,8 @@ const settings = {
   openInApp: true,           // open clicked links in the pane's companion browser
   nameFromTitle: true,       // rename a pane when a program sets the terminal title (OSC)
   showModel: true,           // show the detected AI model (Opus/Sonnet/…) in the header
-  alertFocused: true         // also alert the pane you're working in when it waits on a prompt
+  alertFocused: true,        // also alert the pane you're working in when it waits on a prompt
+  resumeOnOpen: true         // reopening the window resumes each pane's own Claude conversation
 };
 
 // Optional AI clean-up of dictated speech (OpenAI-compatible endpoint, e.g. free Qwen on
@@ -491,6 +492,9 @@ function createPane(opts = {}) {
     // Set once the id came from the pane's own output, so the folder-level guess
     // can never overwrite a known-good binding.
     aiSessionLocked: !!opts.aiLocked,
+    // Set when the id came from matching Claude's own title against the
+    // transcripts: weaker than the output scan, still good enough to resume.
+    aiSessionTitled: !!opts.aiTitled,
     aiName: opts.aiName || '',
   };
   // OSC 7: shell emits \x1b]7;file:///path\x07 after each prompt — track current directory
@@ -817,18 +821,20 @@ function createPane(opts = {}) {
 
   renderIcons();
 
-  // Spawn the shell
+  // Spawn the shell. The promise is kept: anything that wants to type into a
+  // brand-new pane (the restore pass) has to know the PTY is actually there.
   fitAddon.fit();
-  window.api.spawn({
+  pane.spawned = window.api.spawn({
     id, cols: term.cols || 80, rows: term.rows || 24,
     // opts.cwd wins so a recovered session reopens in the directory it was in.
     cwd: opts.cwd || settings.projectsDir || undefined,
     name, color
   }).then((res) => {
-    if (!res || !res.ok) { term.writeln('\x1b[31mFailed to start shell: ' + (res && res.error ? res.error : 'unknown') + '\x1b[0m'); return; }
+    if (!res || !res.ok) { term.writeln('\x1b[31mFailed to start shell: ' + (res && res.error ? res.error : 'unknown') + '\x1b[0m'); return false; }
     pane.transcript = res.transcript || '';
     if (res.cwd) pane.cwd = res.cwd;
-  });
+    return true;
+  }).catch(() => false);
 
   return pane;
 }
@@ -1342,9 +1348,14 @@ function maybeShowResumeBanner(pane) {
   if (Date.now() - entry.timestamp > 7 * 24 * 60 * 60 * 1000) { clearResumeEntry(pane.cwd); return; }
   const banner = pane.el.querySelector('.resume-banner');
   if (!banner) return;
+  // Say WHICH conversation. Every pane in ~ used to get the same
+  // "Resume Claude Code session · ~", so six banners looked like one repeated
+  // offer rather than six different pieces of work.
   const cwdShort = entry.cwd.replace(/^\/Users\/[^/]+/, '~');
+  const which = pane.aiTitle || (pane.aiSessionId ? pane.aiSessionId.slice(0, 8) : '') || cwdShort;
   banner.querySelector('.resume-text').textContent =
-    `Resume ${TOOL_DISPLAY[entry.tool] || entry.tool} session · ${cwdShort}`;
+    `Resume ${TOOL_DISPLAY[entry.tool] || entry.tool} · ${which}`;
+  banner.title = entry.cmd;
   banner.hidden = false;
   renderIcons();
   banner.querySelector('.resume-run-btn').onclick = () => {
@@ -1352,8 +1363,150 @@ function maybeShowResumeBanner(pane) {
     banner.hidden = true; clearResumeEntry(pane.cwd); pane.term.focus();
   };
   banner.querySelector('.resume-dismiss-btn').onclick = () => {
-    banner.hidden = true; clearResumeEntry(pane.cwd);
+    banner.hidden = true; pane.resumeDismissed = true; clearResumeEntry(pane.cwd);
   };
+}
+
+// ---- Bringing the conversations back on reopen ------------------------------
+// A restored pane gets a fresh shell, so the work is only back on screen once
+// `claude --resume <id>` has actually run in it. Offering one banner per pane
+// meant six identical-looking buttons and, in practice, whichever one you
+// clicked was the only conversation you got back: the other five panes sat at a
+// bare prompt for the rest of the night.
+const RESUME_STAGGER_MS = 1200;
+function wait(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+// zsh discards anything typed while it is still starting up, and the PTY promise
+// resolving only means the process exists. The shell having printed something
+// and then gone quiet is its prompt: wait for that before typing at it.
+const SHELL_QUIET_MS = 250;
+async function waitForShell(pane, timeoutMs = 8000) {
+  if ((await pane.spawned) === false) return false;
+  const until = Date.now() + timeoutMs;
+  while (Date.now() < until) {
+    if (pane.gotData && Date.now() - pane.lastDataAt > SHELL_QUIET_MS) return true;
+    await wait(100);
+  }
+  // A slow-but-live shell still gets its conversation back; a silent one does not.
+  return !!pane.gotData;
+}
+
+// Type the resume command into one pane, if it is still there and still idle.
+async function runResume(pane) {
+  if (!(await waitForShell(pane))) return false;
+  if (!panes.includes(pane) && !stored.includes(pane)) return false;   // closed while we waited
+  if (pane.lastKeypress) return false;                                 // you started using it: leave it alone
+  if (pane.resumed) return false;
+  const banner = pane.el.querySelector('.resume-banner');
+  if (banner) banner.hidden = true;
+  pane.resumed = true;
+  window.api.input(pane.id, buildResumeCmd('claude', pane.cwd, pane.aiSessionId) + '\r');
+  pane.lastActivity = Date.now();
+  return true;
+}
+
+// Resume every pane whose conversation we can actually name, one after another.
+//
+// The saved id alone is not good enough to type at a prompt: unless it came from
+// the pane's own output it is the folder-level guess, and after one evening of
+// six panes in ~ five of the six saved ids pointed at somebody else's work.
+// Resolve from Claude's own title first, and where that is ambiguous leave the
+// pane alone and offer the banner, which now says which conversation it would
+// open so a wrong one is obvious before it is clicked.
+//
+// Staggered: six `claude --resume` starting together replay hundreds of
+// megabytes of transcript at once, into panes that are still being sized.
+// `auto` is the boot pass, which honours the preference; the menu command runs
+// regardless of it.
+let resumeAllBusy = false;
+async function resumeAllPanes(auto) {
+  if (resumeAllBusy) return;
+  resumeAllBusy = true;
+  try {
+    // Collapsed panes too: collapsing one is how you keep it running, so a
+    // reopened window that leaves them empty has lost that work just the same.
+    const list = [...panes, ...stored];
+    const mine = list.filter((p) => p.detectedTool === 'claude' && p.cwd && !p.resumed);
+    const byCwd = new Map();
+    for (const p of mine) {
+      if (!byCwd.has(p.cwd)) byCwd.set(p.cwd, []);
+      byCwd.get(p.cwd).push(p);
+    }
+    const runnable = [];
+    for (const [cwd, group] of byCwd) {
+      let sessions = [];
+      try { sessions = (await window.api.claudeSessions(cwd)) || []; } catch (_) {}
+      resolveByTitle(group, sessions);
+      const live = new Set(sessions.map((s) => s.id));
+      for (const p of group) {
+        const m = sessions.find((s) => s.id === p.aiSessionId);
+        if (m && m.title) p.aiTitle = m.title.slice(0, 60);
+        // Trustworthy = the pane's own output said so, or its title matched a
+        // single conversation just now. A bare guess is not resumed for you.
+        if (p.aiSessionId && live.has(p.aiSessionId) && (p.aiSessionLocked || p.aiSessionTitled)) runnable.push(p);
+      }
+    }
+    if (auto) {
+      const skipped = (settings.resumeOnOpen ? list.filter((p) => !runnable.includes(p)) : list)
+        .filter((p) => !p.resumed);
+      skipped.forEach((p) => { if (!p.resumeDismissed) maybeShowResumeBanner(p); });
+      if (!settings.resumeOnOpen) return;
+    } else {
+      // Run by hand: say plainly which panes could not be named.
+      list.filter((p) => !runnable.includes(p) && !p.resumed).forEach(maybeShowResumeBanner);
+    }
+    for (let i = 0; i < runnable.length; i++) {
+      if (i) await wait(RESUME_STAGGER_MS);
+      await runResume(runnable[i]);
+    }
+  } finally { resumeAllBusy = false; }
+}
+
+// ---- Which conversation is this pane's? -------------------------------------
+// Claude Code sets the terminal title to its own conversation title and the pane
+// keeps it in aiName, so matching that against the ai-title recorded in the
+// transcripts names the conversation outright. The folder's newest unclaimed
+// session, which is what DiscoVibe used to fall back on, is a coin toss the
+// moment two panes share a directory.
+//
+// The status glyph Claude prefixes ("✳ ", "◑ ") is not part of the title, and
+// "Claude Code" is what a conversation too new to have earned a title shows:
+// it names nothing and every fresh pane wears it.
+function bareTitle(s) {
+  return String(s || '').replace(/^[^\p{L}\p{N}]+/u, '').trim().toLowerCase();
+}
+function titleIsGeneric(t) { return !t || t === 'claude code' || /^claude code\b/.test(t); }
+
+// Assign ids across a whole group of panes at once, because the ambiguity is
+// between panes: two panes showing one title cannot both own the conversation.
+function resolveByTitle(group, sessions) {
+  const wanted = new Map();     // title -> panes wanting it
+  for (const p of group) {
+    if (p.aiSessionLocked) continue;                 // proved by its own output
+    const t = bareTitle(p.aiName);
+    if (titleIsGeneric(t)) continue;
+    if (!wanted.has(t)) wanted.set(t, []);
+    wanted.get(t).push(p);
+  }
+  for (const [title, want] of wanted) {
+    const pool = sessions.filter((s) => bareTitle(s.title) === title).map((s) => s.id);
+    if (!pool.length) continue;
+    const left = [];
+    // A pane already holding one of the candidates keeps it: that pairing is
+    // more likely right than any reshuffle, and it settles the common case of
+    // two panes on the same title.
+    for (const p of want) {
+      const i = pool.indexOf(p.aiSessionId);
+      if (i >= 0) { pool.splice(i, 1); p.aiSessionTitled = true; }
+      else left.push(p);
+    }
+    // Otherwise only take an unambiguous answer.
+    if (left.length === 1 && pool.length === 1) {
+      left[0].aiSessionId = pool[0];
+      left[0].aiSessionTitled = true;
+      scheduleSave();
+    }
+  }
 }
 
 // Poll for tool detection alongside model badge updates
@@ -1376,8 +1529,13 @@ setInterval(() => {
 //
 // The pane's own recorded output is asked first and settles it outright, because
 // Claude prints its scratchpad path and that text can only have come from this
-// pane's PTY. The old guess survives only for panes that have not yet printed
-// anything identifying, and is corrected as soon as they do.
+// pane's PTY. That only fires when a session happens to print the path, though,
+// and after an evening of six panes in ~ not one had, so every saved id was
+// still the folder-level guess and five of the six named somebody else's work.
+// Claude's own terminal title, which the pane already keeps in aiName, is the
+// signal that covers the ordinary case: match it against the titles recorded in
+// the transcripts. The guess survives only for a pane whose title says nothing
+// yet, and is corrected as soon as one arrives.
 let claimBusy = false;
 const SCAN_EVERY_MS = 20000;
 async function claimClaudeSessions() {
@@ -1385,14 +1543,23 @@ async function claimClaudeSessions() {
   const now = Date.now();
   // Panes that never print an identifying path would otherwise be re-read every
   // interval forever, so ease off after each miss and settle at about 2 minutes.
+  // A title can start naming a pane at any time, so a pane whose title has
+  // changed since we last looked is always worth another pass.
   const need = panes.filter((p) => p.detectedTool === 'claude' && p.cwd && !p.aiSessionLocked
-    && (!p._scanAt || now - p._scanAt > SCAN_EVERY_MS * Math.min(6, 1 + (p._scanMisses || 0))));
+    && (!p._scanAt || p._titleAt !== p.aiName
+        || now - p._scanAt > SCAN_EVERY_MS * Math.min(6, 1 + (p._scanMisses || 0))));
   if (!need.length) return;
   claimBusy = true;
   try {
-    const byCwd = new Map();
+    const sessionsFor = new Map();
+    const sessions = async (cwd) => {
+      if (!sessionsFor.has(cwd)) sessionsFor.set(cwd, (await window.api.claudeSessions(cwd)) || []);
+      return sessionsFor.get(cwd);
+    };
+    const stillNeed = [];
     for (const p of need) {
       p._scanAt = Date.now();
+      p._titleAt = p.aiName;
       // 1. This pane's own output. Authoritative.
       let scan = null;
       try { scan = await window.api.sessionIdScan(p.id, p.cwd); } catch (_) {}
@@ -1404,12 +1571,26 @@ async function claimClaudeSessions() {
         continue;
       }
       p._scanMisses = (p._scanMisses || 0) + 1;
-      // 2. Already carrying a guess: leave it rather than re-rolling the dice.
+      stillNeed.push(p);
+    }
+    // 2. Claude's own title, resolved across all the panes in a folder at once,
+    // since the ambiguity is between panes. Overrides an earlier guess.
+    const byCwd = new Map();
+    for (const p of stillNeed) {
+      if (!byCwd.has(p.cwd)) byCwd.set(p.cwd, []);
+      byCwd.get(p.cwd).push(p);
+    }
+    for (const [cwd, group] of byCwd) {
+      resolveByTitle(group, await sessions(cwd));
+      for (const p of group) if (p.aiSessionTitled) rememberSessionName(p);
+    }
+    for (const p of stillNeed) {
+      if (p.aiSessionTitled) continue;
+      // 3. Already carrying a guess: leave it rather than re-rolling the dice.
       if (p.aiSessionId) { rememberSessionName(p); continue; }
-      // 3. Nothing to go on yet. Guess, and correct it once output arrives.
-      if (!byCwd.has(p.cwd)) byCwd.set(p.cwd, await window.api.claudeSessions(p.cwd));
+      // 4. Nothing to go on yet. Guess, and correct it once a title arrives.
       const taken = new Set([...panes, ...stored].map((x) => x.aiSessionId).filter(Boolean));
-      const free = (byCwd.get(p.cwd) || []).find((sess) => !taken.has(sess.id));
+      const free = (await sessions(p.cwd)).find((sess) => !taken.has(sess.id));
       if (free) { p.aiSessionId = free.id; scheduleSave(); rememberSessionName(p); }
     }
   } catch (_) {} finally { claimBusy = false; }
@@ -1520,6 +1701,10 @@ function openPreferences() {
   const sec = (t) => { const d = document.createElement('div'); d.className = 'pop-title'; d.style.marginTop = '14px'; d.textContent = t; card.appendChild(d); };
 
   sec('Behavior');
+  card.appendChild(checkRow('Resume every conversation when the window reopens', () => settings.resumeOnOpen, (v) => { settings.resumeOnOpen = v; settingsChanged(); }));
+  const rNote = document.createElement('div'); rNote.className = 'layout-empty';
+  rNote.textContent = 'Each restored pane runs claude --resume on its own conversation, a second or so apart. Off = a Resume button per pane instead. ⌘⇧O runs it by hand.';
+  card.appendChild(rNote);
   card.appendChild(checkRow('Alert the terminal I’m working in', () => settings.alertFocused, (v) => { settings.alertFocused = v; settingsChanged(); }));
   card.appendChild(checkRow('Auto-collapse idle terminals', () => settings.autoCollapse, (v) => { settings.autoCollapse = v; settingsChanged(); }));
   card.appendChild(stepperRow('Idle minutes', () => settings.autoCollapseMin + 'm',
@@ -2397,7 +2582,7 @@ function paneConfig(p, collapsed) {
     webUrl: p.webUrl || '', note: p.note || '', manual: !!p.manualName, collapsed: !!collapsed,
     cwd: p.cwd || '', aiName: p.aiName || '',
     aiTool: p.detectedTool || '', aiSessionId: p.aiSessionId || '',
-    aiLocked: !!p.aiSessionLocked };
+    aiLocked: !!p.aiSessionLocked, aiTitled: !!p.aiSessionTitled };
 }
 function serializePanes() {
   return [...panes.map((p) => paneConfig(p, false)), ...stored.map((p) => paneConfig(p, true))];
@@ -2462,8 +2647,9 @@ function restoreConfigs(list) {
   const first = panes[0];
   if (first) { setFocused(first.id); setTimeout(() => first.term.focus(), 40); }
   scheduleSave();
-  // After layout settles, show resume banners for any panes with saved AI sessions
-  setTimeout(() => panes.forEach(maybeShowResumeBanner), 300);
+  // After layout settles, put each pane's own conversation back on screen —
+  // banner only for the ones that cannot be resumed automatically.
+  setTimeout(() => resumeAllPanes(true), 300);
 }
 
 // ===========================================================================
@@ -2519,7 +2705,15 @@ function applySettings() {
 // ===========================================================================
 window.api.onData(({ id, data }) => {
   const pane = panes.find((p) => p.id === id) || stored.find((p) => p.id === id);
-  if (pane) { pane.term.write(data); pane.lastActivity = Date.now(); }
+  if (pane) {
+    pane.term.write(data);
+    pane.lastActivity = Date.now();
+    // Raw arrival time, noted here rather than read back off the terminal:
+    // xterm only flushes its write buffer when the window is drawing, and the
+    // restore pass has to know the shell is up even in a window nobody is
+    // looking at yet.
+    pane.gotData = true; pane.lastDataAt = pane.lastActivity;
+  }
 });
 window.api.onExit(({ id }) => {
   const pane = panes.find((p) => p.id === id) || stored.find((p) => p.id === id);
@@ -2862,6 +3056,7 @@ window.api.onMenu((action) => {
   else if (action === 'select-all') selectAllFocused(false);
   else if (action === 'select-all-scrollback') selectAllFocused(true);
   else if (action === 'recover-sessions') openRecovery();
+  else if (action === 'resume-all') resumeAllPanes(false);
   else if (action === 'work-tracker') openWorkTracker();
   else if (action === 'close-terminal' && focusedId) closePane(focusedId);
   else if (action === 'reopen-closed') reopenClosed();
