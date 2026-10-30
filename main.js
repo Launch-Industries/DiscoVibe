@@ -145,7 +145,31 @@ function closeSplash(force) {
   if (!w.isDestroyed()) w.close(); // window's ready-to-show calls in here.
 }
 
-function createWindow(display, role) {
+// ---- Boot gate --------------------------------------------------------------
+// The primary window may reorganise every saved layout before anything opens
+// (see renderer/consolidate.js). Any other window restored at the same time
+// would otherwise restore its old panes and resume their conversations first,
+// so they wait here until the primary says go. A primary that dies or closes
+// opens the gate too, so a crash never strands the other windows.
+let bootGateOpen = false;
+const bootGateWaiters = [];
+function openBootGate() {
+  if (bootGateOpen) return;
+  bootGateOpen = true;
+  bootGateWaiters.splice(0).forEach((resolve) => resolve(true));
+}
+ipcMain.handle('boot-gate', (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (bootGateOpen || !win || win.__role === 'primary') return true;
+  return new Promise((resolve) => bootGateWaiters.push(resolve));
+});
+ipcMain.on('boot-gate-open', openBootGate);
+
+// Testing against a copy of someone's real layout must never type
+// `claude --resume` at conversations the installed app is still running.
+const DRY_RUN = process.env.DISCOVIBE_DRY_RUN === '1';
+
+function createWindow(display, role, key) {
   display = display || screen.getPrimaryDisplay();
   const wa = display.workArea;
 
@@ -170,10 +194,14 @@ function createWindow(display, role) {
 
   win.__displayId = display.id;
   win.__role = role || 'primary';
-  win.__key = (role === 'primary' || !role) ? 'primary' : String(display.id);
+  win.__key = key || ((role === 'primary' || !role) ? 'primary' : String(display.id));
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'), {
-    query: { role: win.__role, key: win.__key }
+    query: { role: win.__role, key: win.__key, ...(DRY_RUN ? { dry: '1' } : {}) }
   });
+  if (win.__role === 'primary') {
+    win.on('closed', openBootGate);
+    win.webContents.on('render-process-gone', openBootGate);
+  }
   win.maximize();
   // Paint-ready is the honest moment to swap: the window has content, so the
   // splash goes away exactly when it stops being useful, never on a timer.
@@ -633,6 +661,199 @@ ipcMain.handle('claude-session-meta', (_e, { cwd, ids } = {}) => {
   return out;
 });
 
+// ---- Consolidation: which repo is each conversation really about? ----------
+// A pane's own cwd says almost nothing. Claude is usually started from the
+// projects folder and moves into repos inside its own tools, so the shell never
+// leaves ~/Developer: on 2026-10-29 all 26 saved panes reported that cwd. Every
+// record in the conversation file carries the cwd Claude was in at the time,
+// though, and counting those (the recent end weighted double, since work
+// drifts) names the repo the conversation is actually about.
+const repoRootCache = new Map();
+function repoRootFor(dir) {
+  if (!dir) return '';
+  if (repoRootCache.has(dir)) return repoRootCache.get(dir);
+  let found = '';
+  try {
+    const start = path.resolve(dir);
+    const root = path.parse(start).root;
+    let cur = start;
+    for (let i = 0; i < 40 && cur && cur !== root; i++) {
+      if (fs.existsSync(path.join(cur, '.git'))) { found = cur; break; }
+      cur = path.dirname(cur);
+    }
+  } catch (_) {}
+  // Home as a repo (a dotfiles checkout) would swallow every conversation.
+  if (found === os.homedir()) found = '';
+  repoRootCache.set(dir, found);
+  return found;
+}
+
+// Not every project is a git repo: RFPs/ and ecs-engagement-plan/ are plain
+// folders. Below the folder Claude was started in, the first folder down is the
+// project when no .git says otherwise. The start folder itself is no project.
+function projectRootFor(cwd, base) {
+  const git = repoRootFor(cwd);
+  if (git) return git;
+  if (!base) return '';
+  const b = path.resolve(base);
+  const c = path.resolve(cwd);
+  if (!c.startsWith(b + path.sep)) return '';
+  return path.join(b, c.slice(b.length + 1).split(path.sep)[0]);
+}
+
+const CWD_RE = /"cwd":"((?:[^"\\]|\\.)*)"/g;
+function countCwds(text, counts, weight, base) {
+  for (const m of text.matchAll(CWD_RE)) {
+    let cwd;
+    try { cwd = JSON.parse('"' + m[1] + '"'); } catch (_) { continue; }
+    const root = projectRootFor(cwd, base);
+    counts.set(root, (counts.get(root) || 0) + weight);
+  }
+}
+
+const REPO_SCAN_HEAD = 512 * 1024;
+const REPO_SCAN_TAIL = 4 * 1024 * 1024;
+const REPO_RECENT = 1024 * 1024;     // the last stretch, weighted double
+// Below this share of the activity a repo is a visit, not the work.
+const REPO_MIN_SHARE = 0.2;
+const repoScanCache = new Map();     // file -> { size, mtime, result }
+
+function sessionRepo(file, base) {
+  let st;
+  try { st = fs.statSync(file); } catch (_) { return null; }
+  const cacheKey = file + '\n' + (base || '');
+  const hit = repoScanCache.get(cacheKey);
+  if (hit && hit.size === st.size && hit.mtime === st.mtimeMs) return hit.result;
+
+  const counts = new Map();
+  if (st.size <= REPO_SCAN_HEAD + REPO_SCAN_TAIL) {
+    const text = readJsonlEdge(file, st.size, false, st.size);
+    const cut = Math.max(0, text.length - Math.min(REPO_RECENT, Math.floor(text.length / 4)));
+    countCwds(text.slice(0, cut), counts, 1, base);
+    countCwds(text.slice(cut), counts, 2, base);
+  } else {
+    // Tens of megabytes is common; the middle adds little the ends do not say.
+    const tail = readJsonlEdge(file, st.size, true, REPO_SCAN_TAIL);
+    countCwds(readJsonlEdge(file, st.size, false, REPO_SCAN_HEAD), counts, 1, base);
+    countCwds(tail.slice(0, Math.max(0, tail.length - REPO_RECENT)), counts, 1, base);
+    countCwds(tail.slice(Math.max(0, tail.length - REPO_RECENT)), counts, 2, base);
+  }
+
+  let total = 0;
+  for (const n of counts.values()) total += n;
+  const ranked = [...counts.entries()].filter(([root]) => root).sort((a, b) => b[1] - a[1]);
+  const top = ranked[0];
+  const share = top && total ? top[1] / total : 0;
+  const result = {
+    repoRoot: top && share >= REPO_MIN_SHARE ? top[0] : '',
+    share: Math.round(share * 100) / 100,
+    // Other repos it spent real time in, so a mixed conversation says so.
+    others: ranked.slice(top && share >= REPO_MIN_SHARE ? 1 : 0)
+      .filter(([, n]) => total && n / total >= 0.08)
+      .slice(0, 3).map(([root]) => path.basename(root)),
+  };
+  repoScanCache.set(cacheKey, { size: st.size, mtime: st.mtimeMs, result });
+  return result;
+}
+
+function gitState(root) {
+  return new Promise((resolve) => {
+    const p = spawn('git', ['-C', root, 'status', '--porcelain=v1', '--branch'], { timeout: 5000 });
+    let out = '';
+    p.stdout.on('data', (d) => { out += d.toString(); });
+    p.on('error', () => resolve({ branch: '', dirty: null }));
+    p.on('close', (code) => {
+      if (code !== 0) return resolve({ branch: '', dirty: null });
+      const lines = out.split('\n').filter(Boolean);
+      const head = (lines[0] || '').replace(/^## /, '');
+      const branch = head.split('...')[0].replace(/^No commits yet on /, '');
+      resolve({ branch, dirty: lines.length - 1 });
+    });
+  });
+}
+
+// The close-out command only makes sense where one exists. DiscoVibe ships to
+// people who have no such command, so it is detected rather than assumed.
+function detectCloseoutCommand() {
+  const base = path.join(os.homedir(), '.claude');
+  const candidates = [path.join(base, 'commands', 'closeout.md'), path.join(base, 'skills', 'closeout', 'SKILL.md')];
+  return candidates.some((f) => fs.existsSync(f)) ? '/closeout' : '';
+}
+
+// One call for the whole triage screen: every saved pane's conversation, the
+// repo it belongs to, and the state of each repo involved.
+ipcMain.handle('consolidate-analyze', async (_e, { panes } = {}) => {
+  const status = readSessionStatus();
+  const sessions = {};
+  const cwdRepos = {};
+  const roots = new Set();
+  for (const p of (Array.isArray(panes) ? panes : []).slice(0, 200)) {
+    const cwd = String(p.cwd || '');
+    if (cwd && !(cwd in cwdRepos)) {
+      const root = repoRootFor(cwd);
+      cwdRepos[cwd] = root;
+      if (root) roots.add(root);
+    }
+    const id = String(p.sessionId || '');
+    if (!id || sessions[id] || !new RegExp('^' + UUID_SRC + '$').test(id)) continue;
+    const dir = claudeProjectDir(cwd);
+    const file = dir ? path.join(dir, id + '.jsonl') : '';
+    const meta = file ? readSessionMetaCached(file) : null;
+    if (!meta) { sessions[id] = { exists: false }; continue; }
+    const repo = sessionRepo(file, cwd) || { repoRoot: '', share: 0, others: [] };
+    if (repo.repoRoot) roots.add(repo.repoRoot);
+    sessions[id] = {
+      exists: true, title: meta.title || '', lastPrompt: meta.lastPrompt || '', mtime: meta.mtime,
+      completed: !!(status[id] && status[id].completedAt), ...repo,
+    };
+  }
+  const repos = {};
+  await Promise.all([...roots].map(async (root) => {
+    repos[root] = { name: path.basename(root), ...(await gitState(root)) };
+  }));
+  return { sessions, cwdRepos, repos, closeoutCommand: detectCloseoutCommand(), home: os.homedir() };
+});
+
+// The windows that are actually open, so a plan only ever reads their layouts.
+ipcMain.handle('window-keys', () => [...windows].filter((w) => !w.isDestroyed()).map((w) => w.__key));
+
+// Open (or keep) exactly the windows a consolidation plan asks for. The caller
+// is the primary window; it hosts one group itself. Every other window that is
+// not in the plan has had its layout handed out elsewhere, so it is closed.
+ipcMain.handle('consolidate-open', (event, { windows: wanted } = {}) => {
+  const caller = BrowserWindow.fromWebContents(event.sender);
+  const keys = new Set((wanted || []).map((w) => String(w.key)));
+  for (const w of [...windows]) {
+    if (w === caller || w.isDestroyed()) continue;
+    if (!keys.has(w.__key)) w.close();
+  }
+  const display = (caller && screen.getDisplayMatching(caller.getBounds())) || screen.getPrimaryDisplay();
+  for (const k of keys) {
+    if (caller && k === caller.__key) continue;
+    if ([...windows].some((w) => !w.isDestroyed() && w.__key === k)) continue;
+    createWindow(display, 'repo', k);
+  }
+  persistWindows();
+  return { ok: true };
+});
+
+// Applying a plan mid-session means the panes have to restart, and restarting
+// is the one path that is already proven to bring every conversation back.
+ipcMain.on('relaunch', () => { app.relaunch(); app.quit(); });
+
+// One conversation, one pane. Two `claude --resume` on the same id write to
+// the same file at once; on 2026-10-29 three panes held 89306fd7 and every
+// relaunch would have resumed it three times. The first pane to ask keeps it
+// for as long as its shell is alive.
+const resumeClaims = new Map();      // conversation id -> pty id
+ipcMain.handle('claim-resume', (_e, { sessionId, paneId } = {}) => {
+  if (!sessionId || !paneId) return false;
+  const holder = resumeClaims.get(sessionId);
+  if (holder && holder !== paneId && ptys.has(holder)) return false;
+  resumeClaims.set(sessionId, paneId);
+  return true;
+});
+
 ipcMain.handle('list-transcripts', () => {
   const dir = transcriptsDir();
   const live = new Set([...transcripts.values()].map((r) => r.meta.base));
@@ -907,6 +1128,7 @@ function buildMenu() {
         { label: 'Reopen Closed Terminal', accelerator: 'CmdOrCtrl+Shift+T', click: () => sendToFocused('reopen-closed') },
         { label: 'Recover Session…', accelerator: 'CmdOrCtrl+Shift+R', click: () => sendToFocused('recover-sessions') },
         { label: 'Resume All Conversations', accelerator: 'CmdOrCtrl+Shift+O', click: () => sendToFocused('resume-all') },
+        { label: 'Consolidate Windows by Repo…', accelerator: 'CmdOrCtrl+Shift+G', click: () => sendToFocused('consolidate') },
         { label: 'Close ALL Terminals (Killswitch)', accelerator: 'CmdOrCtrl+Shift+K', click: () => sendToFocused('kill-all') },
         { type: 'separator' },
         { label: 'Save Terminal Output…', accelerator: 'CmdOrCtrl+S', click: () => sendToFocused('save-output') },
@@ -1023,16 +1245,16 @@ app.whenReady().then(() => {
   // Restore the window set from the last session (crash/quit recovery).
   const saved = readWindows();
   const displays = screen.getAllDisplays();
-  const hasPrimary = saved.some((w) => w.role === 'primary' || w.key === 'primary');
-  if (saved.length && hasPrimary) {
-    saved.forEach((w, i) => {
-      const d = displays.find((dd) => String(dd.id) === String(w.displayId))
-        || (i === 0 ? screen.getPrimaryDisplay() : displays[i % displays.length]);
-      createWindow(d || screen.getPrimaryDisplay(), w.role || 'primary');
-    });
-  } else {
-    createWindow(screen.getPrimaryDisplay(), 'primary');
-  }
+  // Closing the General window while repo windows stay open saves a list with
+  // no primary. Restoring only a fresh primary then would drop every repo
+  // window, so put a primary back in front and restore the rest as saved.
+  const list = saved.filter((w) => w && w.key);
+  if (!list.some((w) => w.role === 'primary' || w.key === 'primary')) list.unshift({ role: 'primary', key: 'primary' });
+  list.forEach((w, i) => {
+    const d = displays.find((dd) => String(dd.id) === String(w.displayId))
+      || (i === 0 ? screen.getPrimaryDisplay() : displays[i % displays.length]);
+    createWindow(d || screen.getPrimaryDisplay(), w.role || 'primary', w.key);
+  });
 
   // Finalize every open transcript on quit so recovery sees a clean end time.
   app.on('before-quit', () => { isQuitting = true; [...transcripts.keys()].forEach(transcriptClose); });

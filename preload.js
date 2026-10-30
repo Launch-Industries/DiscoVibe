@@ -41,6 +41,15 @@ contextBridge.exposeInMainWorld('api', {
   sessionSync: (sessions) => ipcRenderer.invoke('session-sync', { sessions }),
   sessionSyncConfig: (patch) => ipcRenderer.invoke('session-sync-config', patch),
 
+  // Consolidation (one window per repo)
+  bootGate: () => ipcRenderer.invoke('boot-gate'),
+  openBootGate: () => ipcRenderer.send('boot-gate-open'),
+  windowKeys: () => ipcRenderer.invoke('window-keys'),
+  consolidateAnalyze: (panes) => ipcRenderer.invoke('consolidate-analyze', { panes }),
+  consolidateOpen: (windows) => ipcRenderer.invoke('consolidate-open', { windows }),
+  relaunch: () => ipcRenderer.send('relaunch'),
+  claimResume: (sessionId, paneId) => ipcRenderer.invoke('claim-resume', { sessionId, paneId }),
+
   // Companion browser / folders
   pickFile: () => ipcRenderer.invoke('pick-file'),
   pickFolder: () => ipcRenderer.invoke('pick-folder'),

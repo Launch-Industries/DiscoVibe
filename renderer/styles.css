@@ -247,7 +247,7 @@ body.dim-inactive .pane:not(.focused) .pane-body { filter: brightness(var(--dim-
 }
 
 /* First-launch installer wizard + Preferences modal */
-#onboard, #prefs, #feedback-modal, #recover {
+#onboard, #prefs, #feedback-modal, #recover, #consolidate {
   position: fixed; inset: 0; z-index: 10000;
   background: rgba(2,3,10,.65); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
   display: flex; align-items: center; justify-content: center;
@@ -587,3 +587,64 @@ body.dim-inactive .pane:not(.focused) .pane-body { filter: brightness(var(--dim-
 .ctx-item:disabled { opacity: .38; cursor: default; }
 .ctx-hint { opacity: .5; font-size: 11px; font-variant-numeric: tabular-nums; }
 .ctx-sep { height: 1px; background: var(--pop-line); margin: 5px 4px; }
+
+/* ---- Consolidate: one window per repo ---- */
+.cons-card { width: 980px; max-width: 94vw; max-height: 90vh; display: flex; flex-direction: column; }
+.cons-summary { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.cons-list { flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 14px; padding-right: 4px; }
+.cons-group { display: flex; flex-direction: column; gap: 6px; }
+.cons-ghead { display: flex; align-items: baseline; gap: 10px; padding: 0 2px 2px; border-bottom: 1px solid var(--pop-line); }
+.cons-gname { font-weight: 800; font-size: 14px; display: inline-flex; align-items: center; gap: 6px; }
+.cons-gname svg.lucide { width: 15px; height: 15px; color: var(--accent); }
+.cons-gmeta { font-size: 12px; color: var(--readout); }
+.cons-row {
+  display: flex; align-items: flex-start; gap: 12px; padding: 9px 12px; border-radius: 10px;
+  border: 1px solid var(--pop-line); background: var(--btn-bg);
+  border-left: 4px solid var(--rec-color, var(--pop-line));
+}
+.cons-row.a-close { opacity: .55; }
+.cons-row.a-closeout { border-color: rgba(123,143,255,.45); }
+.cons-title { font-weight: 500; color: var(--readout); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.cons-flags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.cons-chip {
+  font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px;
+  background: var(--pop-bg); border: 1px solid var(--pop-line); color: var(--chrome-fg);
+}
+.cons-chip.quiet { color: var(--readout); }
+.cons-chip.info { border-color: rgba(123,143,255,.5); color: #b9c4ff; }
+.cons-chip.warn { border-color: rgba(240,180,60,.55); color: #ffd58a; }
+.cons-chip.bad { border-color: rgba(255,110,110,.6); color: #ffb3b3; }
+body.light .cons-chip.info { color: #2346a8; }
+body.light .cons-chip.warn { color: #8a5a00; }
+body.light .cons-chip.bad { color: #a01c1c; }
+.cons-ctl { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex: 0 0 auto; }
+.cons-seg { display: inline-flex; border: 1px solid var(--pop-line); border-radius: 8px; overflow: hidden; }
+.cons-seg button {
+  font: inherit; font-size: 12px; font-weight: 600; padding: 5px 10px; cursor: pointer;
+  background: var(--pop-bg); color: var(--chrome-fg); border: none; border-right: 1px solid var(--pop-line);
+}
+.cons-seg button:last-child { border-right: none; }
+.cons-seg button:hover:not(:disabled) { background: var(--btn-bg-hover); }
+.cons-seg button.on { background: var(--accent); color: #06101f; }
+.cons-seg button:disabled { opacity: .35; cursor: not-allowed; }
+.cons-dest {
+  font: inherit; font-size: 12px; padding: 4px 6px; border-radius: 6px; max-width: 220px;
+  background: var(--pop-bg); color: var(--chrome-fg); border: 1px solid var(--pop-line);
+}
+.cons-go { padding: 8px 16px; font-size: 13px; }
+.closeout-bar { border-bottom-color: rgba(123,143,255,.45); }
+.closeout-ghost {
+  flex: 0 0 auto; padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600;
+  background: transparent; color: var(--chrome-fg); border: 1px solid var(--pop-line);
+}
+.closeout-ghost:hover { background: var(--btn-bg-hover); }
+@media (max-width: 720px) {
+  .cons-row { flex-direction: column; }
+  .cons-ctl { align-items: stretch; width: 100%; }
+  .cons-dest { max-width: none; }
+}
+/* Light mode: the shared dialog card was hard-coded dark, which left dark text
+   on a dark card in every dialog (Preferences and Outstanding work included). */
+body.light .ob-card { background: rgba(255,255,255,0.98); border-color: var(--pop-line); box-shadow: 0 20px 70px rgba(20,30,60,.25); }
+body.light .cons-row { background: #f6f8fc; }
+body.light .cons-seg button.on, body.light .cons-go { color: #fff; }

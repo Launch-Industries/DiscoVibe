@@ -39,7 +39,9 @@ const settings = {
   nameFromTitle: true,       // rename a pane when a program sets the terminal title (OSC)
   showModel: true,           // show the detected AI model (Opus/Sonnet/…) in the header
   alertFocused: true,        // also alert the pane you're working in when it waits on a prompt
-  resumeOnOpen: true         // reopening the window resumes each pane's own Claude conversation
+  resumeOnOpen: true,        // reopening the window resumes each pane's own Claude conversation
+  consolidateOnLaunch: true, // offer to sort terminals into one window per repo when they are mixed
+  closeoutCommand: ''        // '' = detected (/closeout when ~/.claude has one)
 };
 
 // Optional AI clean-up of dictated speech (OpenAI-compatible endpoint, e.g. free Qwen on
@@ -60,6 +62,21 @@ const voiceAI = {
 const WIN_TAG = Math.random().toString(36).slice(2, 8);
 const ROLE = new URLSearchParams(location.search).get('role') || 'primary';
 const WIN_KEY = new URLSearchParams(location.search).get('key') || 'primary';
+// Dry run (DISCOVIBE_DRY_RUN=1): print what would be typed into a shell instead
+// of typing it, so a copy of a real layout can be tested while the installed
+// app still has those conversations open.
+const DRY_RUN = new URLSearchParams(location.search).get('dry') === '1';
+
+// What this window is for, when consolidation gave it a repo. New terminals
+// open at that repo's root; restored ones keep their own folder, because
+// `claude --resume <id>` only finds a conversation from the folder it began in.
+const WINMETA_KEY = 'discovibe.window.v1:' + WIN_KEY;
+let windowMeta = {};
+function loadWindowMeta() {
+  try { windowMeta = JSON.parse(localStorage.getItem(WINMETA_KEY)) || {}; } catch (_) { windowMeta = {}; }
+}
+loadWindowMeta();
+function defaultCwd() { return windowMeta.repoRoot || settings.projectsDir || ''; }
 
 const MIN_TITLE = 12, MAX_TITLE = 56;
 const MIN_FONT = 8, MAX_FONT = 32;
@@ -483,7 +500,7 @@ function createPane(opts = {}) {
     collapsed: false, attnTimer: null, chimeCount: 0, lastActivity: Date.now(), lastKeypress: 0,
     selAnchor: null, selFocus: null,   // keyboard-selection endpoints, absolute buffer coords
     lastSelection: '',                 // survives a repaint wiping the live selection
-    cwd: opts.cwd || settings.projectsDir || '',   // updated by OSC 7 or cd detection
+    cwd: opts.cwd || defaultCwd(),   // updated by OSC 7 or cd detection
     detectedTool: opts.aiTool || null,
     // The exact Claude conversation this pane is running. Persisted with the
     // layout so a crash can resume THIS pane's session rather than whatever
@@ -496,6 +513,9 @@ function createPane(opts = {}) {
     // transcripts: weaker than the output scan, still good enough to resume.
     aiSessionTitled: !!opts.aiTitled,
     aiName: opts.aiName || '',
+    // Set by consolidation: this pane is waiting for its close-out to run.
+    closeoutPending: !!opts.closeoutPending,
+    closeoutRepo: opts.closeoutRepo || '',
   };
   // OSC 7: shell emits \x1b]7;file:///path\x07 after each prompt — track current directory
   if (term.parser && term.parser.registerOscHandler) {
@@ -827,7 +847,7 @@ function createPane(opts = {}) {
   pane.spawned = window.api.spawn({
     id, cols: term.cols || 80, rows: term.rows || 24,
     // opts.cwd wins so a recovered session reopens in the directory it was in.
-    cwd: opts.cwd || settings.projectsDir || undefined,
+    cwd: opts.cwd || defaultCwd() || undefined,
     name, color
   }).then((res) => {
     if (!res || !res.ok) { term.writeln('\x1b[31mFailed to start shell: ' + (res && res.error ? res.error : 'unknown') + '\x1b[0m'); return false; }
@@ -1380,7 +1400,12 @@ function wait(ms) { return new Promise((r) => setTimeout(r, ms)); }
 // resolving only means the process exists. The shell having printed something
 // and then gone quiet is its prompt: wait for that before typing at it.
 const SHELL_QUIET_MS = 250;
-async function waitForShell(pane, timeoutMs = 8000) {
+// Generous on purpose: reopening a dozen windows starts every shell at once, and
+// on 2026-10-29 the first panes in each window took longer than the old 8s, gave
+// up, and were left blank while the later ones resumed. The shells start in
+// parallel, so only the first pane in a window ever waits this long.
+const SHELL_READY_MAX_MS = 30000;
+async function waitForShell(pane, timeoutMs = SHELL_READY_MAX_MS) {
   if ((await pane.spawned) === false) return false;
   const until = Date.now() + timeoutMs;
   while (Date.now() < until) {
@@ -1397,12 +1422,25 @@ async function runResume(pane) {
   if (!panes.includes(pane) && !stored.includes(pane)) return false;   // closed while we waited
   if (pane.lastKeypress) return false;                                 // you started using it: leave it alone
   if (pane.resumed) return false;
+  // Another pane, possibly in another window, already has this conversation.
+  let claimed = true;
+  try { claimed = await window.api.claimResume(pane.aiSessionId, pane.id); } catch (_) {}
+  if (!claimed) {
+    pane.term.writeln('\r\n\x1b[33mNot resumed: this conversation is already open in another pane.\x1b[0m');
+    return false;
+  }
   const banner = pane.el.querySelector('.resume-banner');
   if (banner) banner.hidden = true;
   pane.resumed = true;
-  window.api.input(pane.id, buildResumeCmd('claude', pane.cwd, pane.aiSessionId) + '\r');
+  typeCommand(pane, buildResumeCmd('claude', pane.cwd, pane.aiSessionId));
   pane.lastActivity = Date.now();
   return true;
+}
+
+// Type a command into a pane and run it, or in a dry run, show it instead.
+function typeCommand(pane, cmd) {
+  if (DRY_RUN) { pane.term.writeln('\r\n\x1b[33m[dry run] would type: ' + cmd + '\x1b[0m'); return; }
+  window.api.input(pane.id, cmd + '\r');
 }
 
 // Resume every pane whose conversation we can actually name, one after another.
@@ -1446,6 +1484,17 @@ async function resumeAllPanes(auto) {
         if (p.aiSessionId && live.has(p.aiSessionId) && (p.aiSessionLocked || p.aiSessionTitled)) runnable.push(p);
       }
     }
+    // Two panes holding one id cannot both resume it. The pane whose own output
+    // proved the id goes first; the other gets the banner so it is visible.
+    runnable.sort((a, b) => (b.aiSessionLocked ? 1 : 0) - (a.aiSessionLocked ? 1 : 0));
+    const seenIds = new Set();
+    const unique = runnable.filter((p) => {
+      if (seenIds.has(p.aiSessionId)) return false;
+      seenIds.add(p.aiSessionId);
+      return true;
+    });
+    runnable.length = 0;
+    runnable.push(...unique);
     if (auto) {
       const skipped = (settings.resumeOnOpen ? list.filter((p) => !runnable.includes(p)) : list)
         .filter((p) => !p.resumed);
@@ -1457,7 +1506,9 @@ async function resumeAllPanes(auto) {
     }
     for (let i = 0; i < runnable.length; i++) {
       if (i) await wait(RESUME_STAGGER_MS);
-      await runResume(runnable[i]);
+      const ok = await runResume(runnable[i]);
+      // Never leave a pane blank without saying so: offer its banner instead.
+      if (!ok && !runnable[i].resumed && !runnable[i].resumeDismissed) maybeShowResumeBanner(runnable[i]);
     }
   } finally { resumeAllBusy = false; }
 }
@@ -1705,6 +1756,11 @@ function openPreferences() {
   const rNote = document.createElement('div'); rNote.className = 'layout-empty';
   rNote.textContent = 'Each restored pane runs claude --resume on its own conversation, a second or so apart. Off = a Resume button per pane instead. ⌘⇧O runs it by hand.';
   card.appendChild(rNote);
+  card.appendChild(checkRow('Sort terminals into one window per repo on launch', () => settings.consolidateOnLaunch !== false, (v) => { settings.consolidateOnLaunch = v; settingsChanged(); }));
+  card.appendChild(textRow('Close-out command', () => settings.closeoutCommand, (v) => { settings.closeoutCommand = v.trim(); saveGlobals(); }, 'detected: /closeout if ~/.claude has one'));
+  const cNote = document.createElement('div'); cNote.className = 'layout-empty';
+  cNote.textContent = 'When panes from different repos share a window, DiscoVibe offers to sort them before anything reopens. ⌘⇧G sorts them any time. Panes marked Close out run this command one at a time.';
+  card.appendChild(cNote);
   card.appendChild(checkRow('Alert the terminal I’m working in', () => settings.alertFocused, (v) => { settings.alertFocused = v; settingsChanged(); }));
   card.appendChild(checkRow('Auto-collapse idle terminals', () => settings.autoCollapse, (v) => { settings.autoCollapse = v; settingsChanged(); }));
   card.appendChild(stepperRow('Idle minutes', () => settings.autoCollapseMin + 'm',
@@ -2582,7 +2638,8 @@ function paneConfig(p, collapsed) {
     webUrl: p.webUrl || '', note: p.note || '', manual: !!p.manualName, collapsed: !!collapsed,
     cwd: p.cwd || '', aiName: p.aiName || '',
     aiTool: p.detectedTool || '', aiSessionId: p.aiSessionId || '',
-    aiLocked: !!p.aiSessionLocked, aiTitled: !!p.aiSessionTitled };
+    aiLocked: !!p.aiSessionLocked, aiTitled: !!p.aiSessionTitled,
+    ...(p.closeoutPending ? { closeoutPending: true, closeoutRepo: p.closeoutRepo || '' } : {}) };
 }
 function serializePanes() {
   return [...panes.map((p) => paneConfig(p, false)), ...stored.map((p) => paneConfig(p, true))];
@@ -2649,7 +2706,7 @@ function restoreConfigs(list) {
   scheduleSave();
   // After layout settles, put each pane's own conversation back on screen —
   // banner only for the ones that cannot be resumed automatically.
-  setTimeout(() => resumeAllPanes(true), 300);
+  setTimeout(async () => { await resumeAllPanes(true); runCloseoutQueue(); }, 300);
 }
 
 // ===========================================================================
@@ -3070,6 +3127,7 @@ window.api.onMenu((action) => {
   else if (action === 'toggle-alerts') toggleAlerts();
   else if (action === 'save-output') saveFocusedOutput();
   else if (action === 'open-prefs') openPreferences();
+  else if (action === 'consolidate') consolidateNow();
 });
 
 window.api.onBroadcast((p) => {
@@ -3083,6 +3141,7 @@ window.api.onBroadcast((p) => {
   else if (p.type === 'settings') { Object.assign(settings, p.value); applySettings(); }
   else if (p.type === 'tileTheme') setTileTheme(p.value, true);
   else if (p.type === 'reskin') reskinAll(p.value);
+  else if (p.type === 'flushSave') writeSession();   // a consolidation is about to read every layout
 });
 
 async function updateDisplayReadout() {
@@ -3132,6 +3191,369 @@ async function pollUsage(force) {
 setInterval(() => pollUsage(false), 5000);
 
 // ===========================================================================
+// Consolidation — one window per repo (planning lives in consolidate.js)
+// ===========================================================================
+const SESSION_PREFIX = 'tileterm.session.v1:';
+const PENDING_PLAN_KEY = 'discovibe.consolidate.pending';
+const SKIPPED_PLAN_KEY = 'discovibe.consolidate.skipped';
+
+// Every window's saved panes, read the same way each window reads its own
+// (current, then backup, then the primary's legacy key). Only windows that
+// are actually open count: a key left behind by a monitor unplugged months ago
+// must not resurrect its panes.
+async function collectWindows() {
+  let keys = [WIN_KEY];
+  try { keys = await window.api.windowKeys(); } catch (_) {}
+  const tryKey = (k) => { try { const s = JSON.parse(localStorage.getItem(k)); return (s && Array.isArray(s.panes) && s.panes.length) ? s.panes : null; } catch (_) { return null; } };
+  return keys.map((key) => {
+    let meta = null;
+    try { meta = JSON.parse(localStorage.getItem('discovibe.window.v1:' + key)); } catch (_) {}
+    const panesFor = tryKey(SESSION_PREFIX + key) || tryKey(SESSION_PREFIX + key + ':bak')
+      || (key === 'primary' ? tryKey('tileterm.session.v1') : null) || [];
+    return { key, meta, panes: panesFor };
+  });
+}
+
+async function analyzeWindows(wins) {
+  const all = wins.flatMap((w) => w.panes.map((p) => ({ cwd: p.cwd || '', sessionId: p.aiSessionId || '' })));
+  return window.api.consolidateAnalyze(all);
+}
+
+// Write every window's new layout before any window opens, then open them.
+// Nothing here deletes a conversation: closed panes go on the recently-closed
+// list, and their conversations stay in ~/.claude and the Outstanding work list.
+async function applyLayout(lay) {
+  const wanted = new Set(lay.windows.map((w) => w.key));
+  const drop = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (!k || !k.startsWith(SESSION_PREFIX)) continue;
+    const key = k.slice(SESSION_PREFIX.length).replace(/:bak$/, '');
+    if (!wanted.has(key)) drop.push(k);
+  }
+  drop.push('tileterm.session.v1');          // legacy key the primary falls back to
+  drop.forEach((k) => { try { localStorage.removeItem(k); } catch (_) {} });
+
+  for (const w of lay.windows) {
+    try {
+      localStorage.setItem(SESSION_PREFIX + w.key, JSON.stringify({ panes: w.panes }));
+      if (w.panes.length) localStorage.setItem(SESSION_PREFIX + w.key + ':bak', JSON.stringify({ panes: w.panes }));
+      else localStorage.removeItem(SESSION_PREFIX + w.key + ':bak');
+      localStorage.setItem('discovibe.window.v1:' + w.key, JSON.stringify({ repoRoot: w.repoRoot || '', title: w.title }));
+      localStorage.setItem('tileterm.winname.v1:' + w.key, JSON.stringify({ name: w.title, manual: true }));
+    } catch (_) {}
+  }
+  if (lay.closed.length) {
+    const list = loadClosed();
+    for (const it of lay.closed) {
+      list.unshift({ name: it.cfg.name, color: it.cfg.color, webUrl: it.cfg.webUrl || '', cwd: it.cfg.cwd || '', transcript: '', closedAt: Date.now() });
+    }
+    saveClosed(list);
+  }
+  loadWindowMeta();
+  loadWindowName();
+  await window.api.consolidateOpen(lay.windows.map((w) => ({ key: w.key })));
+}
+
+const ACTION_LABELS = { keep: 'Keep', closeout: 'Close out', close: 'Close' };
+const FLAG_TONE = { dup: 'bad', missing: 'warn', done: 'warn', similar: 'info', mixed: 'quiet', idle: 'quiet', shell: 'quiet', untitled: 'quiet' };
+
+// The triage screen. Resolves with the layout to apply, or null to leave
+// everything as it is. `live` = opened from the menu with terminals running,
+// so applying means restarting.
+function openTriage(plan, analysis, { live } = {}) {
+  return new Promise((resolve) => {
+    const C = window.Consolidate;
+    const closeoutCmd = settings.closeoutCommand || analysis.closeoutCommand || '';
+    const ov = document.createElement('div'); ov.id = 'consolidate';
+    const card = document.createElement('div'); card.className = 'ob-card cons-card';
+    ov.appendChild(card);
+
+    const finish = (result) => { document.removeEventListener('keydown', onKey); ov.remove(); resolve(result); };
+    const onKey = (e) => { if (e.key === 'Escape') finish(null); };
+    document.addEventListener('keydown', onKey);
+
+    const head = document.createElement('div'); head.className = 'ob-head';
+    head.innerHTML = lic('layout-grid') + ' Sort ' + plan.items.length + ' terminals into one window per repo';
+    const sub = document.createElement('div'); sub.className = 'ob-sub';
+    sub.textContent = 'DiscoVibe read each conversation to see which repo it actually works in. '
+      + 'Change anything below before it opens. Closing a pane never deletes its conversation: '
+      + 'it stays in Outstanding work and can be resumed later.';
+    const summary = document.createElement('div'); summary.className = 'cons-summary';
+    const list = document.createElement('div'); list.className = 'cons-list';
+    card.append(head, sub, summary, list);
+
+    const actions = document.createElement('div'); actions.className = 'ob-actions';
+    const skip = document.createElement('button'); skip.className = 'ob-skip';
+    skip.textContent = live ? 'Cancel' : 'Restore as before';
+    const go = document.createElement('button'); go.className = 'resume-run-btn cons-go';
+    actions.append(skip, go);
+    card.appendChild(actions);
+
+    skip.addEventListener('click', () => finish(null));
+    go.addEventListener('click', () => {
+      const lay = C.layout(plan);
+      if (live && !confirm('DiscoVibe will restart and reopen into ' + lay.windows.length + ' windows. '
+        + 'Any Claude session in the middle of a task will be interrupted and resumed. Continue?')) return;
+      finish(lay);
+    });
+
+    const groupOptions = () => {
+      const ids = new Set(plan.items.map((it) => it.dest));
+      ids.add(C.GENERAL);
+      return [...ids].map((id) => plan.groupInfo(id)).sort((a, b) => (a.id === C.GENERAL) - (b.id === C.GENERAL) || a.name.localeCompare(b.name));
+    };
+
+    function render() {
+      const lay = C.layout(plan);
+      const repoWins = lay.windows.filter((w) => w.key !== C.CLOSEOUTS_KEY);
+      const outs = plan.items.filter((it) => it.action === 'closeout').length;
+      const shut = lay.closed.length;
+      summary.innerHTML = '';
+      const chip = (text, tone) => { const s = document.createElement('span'); s.className = 'cons-chip ' + (tone || ''); s.textContent = text; summary.appendChild(s); };
+      chip(repoWins.length + ' window' + (repoWins.length === 1 ? '' : 's'));
+      if (outs) chip(outs + ' to close out', 'info');
+      if (shut) chip(shut + ' not reopened', 'warn');
+      const dups = plan.items.filter((it) => it.dupOf).length;
+      if (dups) chip(dups + ' duplicate conversation' + (dups === 1 ? '' : 's'), 'bad');
+      go.textContent = (live ? 'Restart into ' : 'Open ') + repoWins.length + ' window' + (repoWins.length === 1 ? '' : 's')
+        + (outs ? ' + close-outs' : '');
+
+      list.innerHTML = '';
+      const opts = groupOptions();
+      for (const g of C.groupsOf(plan)) {
+        const box = document.createElement('div'); box.className = 'cons-group';
+        const gh = document.createElement('div'); gh.className = 'cons-ghead';
+        const gname = document.createElement('span'); gname.className = 'cons-gname';
+        gname.innerHTML = lic(g.id ? 'folder-git-2' : 'folder') + ' ';
+        gname.appendChild(document.createTextNode(g.name));
+        const gmeta = document.createElement('span'); gmeta.className = 'cons-gmeta';
+        const bits = [];
+        if (g.branch) bits.push(g.branch);
+        if (g.dirty) bits.push(g.dirty + ' uncommitted file' + (g.dirty === 1 ? '' : 's'));
+        bits.push(g.count + ' terminal' + (g.count === 1 ? '' : 's'));
+        gmeta.textContent = bits.join(' · ');
+        gh.append(gname, gmeta);
+        box.appendChild(gh);
+
+        for (const it of plan.items.filter((x) => x.dest === g.id)) {
+          const row = document.createElement('div'); row.className = 'cons-row a-' + it.action;
+          row.style.setProperty('--rec-color', it.cfg.color || 'var(--pop-line)');
+          const info = document.createElement('div'); info.className = 'rec-info';
+          const nm = document.createElement('div'); nm.className = 'rec-name';
+          const strong = document.createElement('span'); strong.textContent = it.name || 'Terminal';
+          nm.appendChild(strong);
+          if (it.title && it.title !== it.name) {
+            const t = document.createElement('span'); t.className = 'cons-title'; t.textContent = it.title; nm.appendChild(t);
+          }
+          info.appendChild(nm);
+          const metaBits = [];
+          if (it.mtime) metaBits.push('active ' + C.ago(it.mtime, plan.now));
+          if (it.cfg.collapsed) metaBits.push('was collapsed');
+          if (metaBits.length) { const m = document.createElement('div'); m.className = 'rec-meta'; m.textContent = metaBits.join(' · '); info.appendChild(m); }
+          if (it.lastPrompt) { const lp = document.createElement('div'); lp.className = 'rec-prev'; lp.textContent = '› ' + it.lastPrompt.replace(/\s+/g, ' '); lp.title = it.lastPrompt; info.appendChild(lp); }
+          if (it.flags.length) {
+            const fl = document.createElement('div'); fl.className = 'cons-flags';
+            for (const f of it.flags) { const s = document.createElement('span'); s.className = 'cons-chip ' + (FLAG_TONE[f.kind] || 'quiet'); s.textContent = f.text; fl.appendChild(s); }
+            info.appendChild(fl);
+          }
+
+          const ctl = document.createElement('div'); ctl.className = 'cons-ctl';
+          const seg = document.createElement('div'); seg.className = 'cons-seg';
+          for (const a of ['keep', 'closeout', 'close']) {
+            const b = document.createElement('button'); b.textContent = ACTION_LABELS[a];
+            b.className = it.action === a ? 'on' : '';
+            if (a === 'closeout' && !closeoutCmd) { b.disabled = true; b.title = 'No close-out command found. Set one in Preferences.'; }
+            else if (a === 'closeout' && !it.session) { b.disabled = true; b.title = 'Nothing to close out: no conversation to resume.'; }
+            else if (a === 'closeout') b.title = 'Resume it, then run ' + closeoutCmd + ' (one pane at a time)';
+            else if (a === 'close') b.title = 'Do not reopen. The conversation stays in Outstanding work.';
+            else b.title = 'Reopen it in the ' + plan.groupInfo(it.dest).name + ' window';
+            b.addEventListener('click', () => {
+              if (a === 'keep' && it.dupOf) {
+                // Keeping a duplicate means the other pane gives up the conversation.
+                const other = plan.items.find((x) => x.uid === it.dupOf);
+                if (other && other.action !== 'close') {
+                  if (!confirm('“' + (other.name || other.title) + '” already reopens this conversation. Keep this pane instead and close that one?')) return;
+                  other.action = 'close'; other.dupOf = it.uid; it.dupOf = null;
+                  other.flags = other.flags.filter((f) => f.kind !== 'dup');
+                  other.flags.push({ kind: 'dup', text: 'Same conversation as “' + (it.name || it.title) + '”. Only one pane can resume it.' });
+                  it.flags = it.flags.filter((f) => f.kind !== 'dup');
+                }
+              }
+              it.action = a; render();
+            });
+            seg.appendChild(b);
+          }
+          const sel = document.createElement('select'); sel.className = 'cons-dest';
+          sel.title = 'Which window it opens in';
+          for (const o of opts) {
+            const op = document.createElement('option'); op.value = o.id; op.textContent = o.name;
+            if (o.id === it.dest) op.selected = true;
+            sel.appendChild(op);
+          }
+          sel.addEventListener('change', () => { it.dest = sel.value; render(); });
+          sel.disabled = it.action === 'close';
+          ctl.append(seg, sel);
+          row.append(info, ctl);
+          box.appendChild(row);
+        }
+        list.appendChild(box);
+      }
+      renderIcons();
+    }
+
+    render();
+    document.body.appendChild(ov);
+    renderIcons();
+  });
+}
+
+// Launch: decide whether this layout needs sorting, offer the screen if so,
+// and only then let this window (and every other) restore. Primary only.
+async function consolidateAtBoot() {
+  // A plan chosen mid-session, applied now that nothing is running.
+  let pending = null;
+  try { pending = JSON.parse(localStorage.getItem(PENDING_PLAN_KEY)); } catch (_) {}
+  if (pending && Array.isArray(pending.windows)) {
+    try { localStorage.removeItem(PENDING_PLAN_KEY); } catch (_) {}
+    await applyLayout(pending);
+    return;
+  }
+  if (settings.consolidateOnLaunch === false || !window.Consolidate) return;
+
+  const wins = await collectWindows();
+  if (!wins.some((w) => w.panes.length > 1)) return;
+  let analysis;
+  try { analysis = await analyzeWindows(wins); } catch (_) { return; }
+  const plan = window.Consolidate.buildPlan({ windows: wins, analysis });
+  if (!plan.needed) return;
+  const sig = window.Consolidate.signature(plan);
+  if (localStorage.getItem(SKIPPED_PLAN_KEY) === sig) return;
+
+  const lay = await openTriage(plan, analysis, { live: false });
+  if (!lay) { try { localStorage.setItem(SKIPPED_PLAN_KEY, sig); } catch (_) {} return; }
+  try { localStorage.removeItem(SKIPPED_PLAN_KEY); } catch (_) {}
+  await applyLayout(lay);
+}
+
+// From the menu, with terminals running: plan from what every window has saved
+// this moment, and apply it by restarting into the new layout.
+let consolidateBusy = false;
+async function consolidateNow() {
+  if (consolidateBusy || !window.Consolidate) return;
+  consolidateBusy = true;
+  try {
+    writeSession();
+    window.api.broadcast({ type: 'flushSave' });
+    await wait(400);                         // other windows write on receipt
+    const wins = await collectWindows();
+    const analysis = await analyzeWindows(wins);
+    const plan = window.Consolidate.buildPlan({ windows: wins, analysis });
+    if (!plan.items.length) { flashMsg('Nothing to sort'); return; }
+    const lay = await openTriage(plan, analysis, { live: true });
+    if (!lay) return;
+    try { localStorage.setItem(PENDING_PLAN_KEY, JSON.stringify(lay)); } catch (_) { flashMsg('Could not save the plan'); return; }
+    window.api.relaunch();
+  } catch (err) {
+    flashMsg('Consolidate failed: ' + (err && err.message ? err.message : err));
+  } finally { consolidateBusy = false; }
+}
+
+// ---- Close-outs --------------------------------------------------------------
+// Panes marked Close out reopen in their own window and run the close-out
+// command one at a time: it asks questions (who is closing out, which project
+// the time goes to), and two close-outs committing in one clone at once collide.
+// Nothing here decides when a close-out is finished; you do, with the bar.
+const CLOSEOUT_QUIET_MS = 3000;
+const CLOSEOUT_READY_MAX_MS = 90000;
+let closeoutRunning = false;
+
+async function waitForQuiet(pane, quietMs, maxMs) {
+  const until = Date.now() + maxMs;
+  await wait(quietMs);
+  while (Date.now() < until) {
+    if (Date.now() - (pane.lastDataAt || 0) >= quietMs) return true;
+    await wait(250);
+  }
+  return false;
+}
+
+function closeoutBar(pane, text, buttons) {
+  let bar = pane.el.querySelector('.closeout-bar');
+  if (!bar) {
+    bar = document.createElement('div'); bar.className = 'resume-banner closeout-bar';
+    pane.bodyEl.insertBefore(bar, pane.bodyEl.firstChild);
+  }
+  bar.hidden = false;
+  bar.innerHTML = lic('archive');
+  const t = document.createElement('span'); t.className = 'resume-text'; t.textContent = text;
+  bar.appendChild(t);
+  for (const [label, fn, primary] of buttons) {
+    const b = document.createElement('button');
+    b.className = primary ? 'resume-run-btn' : 'closeout-ghost';
+    b.textContent = label; b.addEventListener('click', fn);
+    bar.appendChild(b);
+  }
+  renderIcons();
+  return bar;
+}
+
+async function runCloseoutQueue() {
+  if (closeoutRunning) return;
+  const queue = () => [...panes, ...stored].filter((p) => p.closeoutPending);
+  if (!queue().length) return;
+  closeoutRunning = true;
+  const cmd = settings.closeoutCommand || (await window.api.consolidateAnalyze([]).then((a) => a.closeoutCommand).catch(() => '')) || '';
+  try {
+    const total = queue().length;
+    let n = 0;
+    while (queue().length) {
+      const pane = queue()[0];
+      n += 1;
+      if (pane.collapsed) restorePane(pane);
+      setFocused(pane.id);
+      const label = 'Close-out ' + n + ' of ' + total + (pane.closeoutRepo ? ' · ' + pane.closeoutRepo : '');
+      if (!cmd) {
+        await new Promise((done) => closeoutBar(pane, label + ': no close-out command is set (Preferences).', [
+          ['Skip', () => { pane.closeoutPending = false; scheduleSave(); done(); }, true]]));
+        continue;
+      }
+      if (!pane.resumed) await runResume(pane);
+      if (!pane.resumed) {
+        await new Promise((done) => closeoutBar(pane, label + ': this conversation could not be resumed here, so nothing was typed.', [
+          ['Skip', () => { pane.closeoutPending = false; scheduleSave(); done(); }, true]]));
+        continue;
+      }
+      closeoutBar(pane, label + ': waiting for Claude to finish loading…', []);
+      await waitForQuiet(pane, CLOSEOUT_QUIET_MS, CLOSEOUT_READY_MAX_MS);
+      if (!panes.includes(pane) && !stored.includes(pane)) continue;   // closed by hand meanwhile
+      // Text then Enter, a beat apart: typed together, Claude's input can take
+      // the Enter as part of a paste instead of a submit.
+      const type = async () => {
+        if (DRY_RUN) { pane.term.writeln('\r\n\x1b[33m[dry run] would type: ' + cmd + '\x1b[0m'); return; }
+        window.api.input(pane.id, cmd);
+        await wait(300);
+        window.api.input(pane.id, '\r');
+      };
+      await type();
+      pane.term.focus();
+      await new Promise((done) => {
+        closeoutBar(pane, label + ': answer its questions here, then say when it is finished.', [
+          ['Type ' + cmd + ' again', () => type(), false],
+          ['Skip', () => { pane.closeoutPending = false; scheduleSave(); const b = pane.el.querySelector('.closeout-bar'); if (b) b.hidden = true; done(); }, false],
+          ['Finished · close pane', async () => {
+            pane.closeoutPending = false;
+            if (pane.aiSessionId) { try { await window.api.sessionComplete(pane.aiSessionId, true); } catch (_) {} }
+            if (pane.collapsed) closeStored(pane); else closePane(pane.id);
+            done();
+          }, true],
+        ]);
+      });
+    }
+  } finally { closeoutRunning = false; }
+}
+
+// ===========================================================================
 // Boot
 // ===========================================================================
 (function boot() {
@@ -3160,11 +3582,20 @@ setInterval(() => pollUsage(false), 5000);
   applySettings();
   renderIcons();
 
-  const s = loadSession();
-  if (s && Array.isArray(s.panes) && s.panes.length) restoreConfigs(s.panes);
-  else addPane();
+  // Restoring waits for the consolidation check (primary) or for the primary
+  // to finish it (every other window), so no pane opens twice.
+  (async () => {
+    try {
+      if (ROLE === 'primary') await consolidateAtBoot();
+      else await window.api.bootGate();
+    } catch (err) { console.log('consolidate at boot failed:', err && err.message); }
+    if (ROLE === 'primary') window.api.openBootGate();
+    const s = loadSession();
+    if (s && Array.isArray(s.panes) && s.panes.length) restoreConfigs(s.panes);
+    else addPane();
+    initWindowName();
+  })();
   updateDisplayReadout();
-  initWindowName();
   pollUsage(true);
   fetchRemoteTools();   // refresh tool/command definitions from GitHub in the background
 })();

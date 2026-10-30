@@ -42,6 +42,13 @@ Launch from Spotlight / Launchpad. If macOS blocks it (unsigned build), right-cl
 - **Auto-name terminals from AI activity** — detects Claude / Codex / Gemini output and renames the pane header accordingly
 - **Show AI model in header** — Opus / Sonnet / Haiku badge auto-detected from output
 
+### One window per repo
+- **Sort on launch**: when panes from different repos share a window, DiscoVibe reads each Claude conversation to see which repo it actually works in and offers to give every repo its own window before anything reopens
+- **Duplicates caught**: two panes holding the same conversation never both resume it
+- **Close out redundant sessions**: mark panes *Close out* and they reopen in a temporary window that runs your close-out command one pane at a time (detected as `/closeout` when `~/.claude` has one; set it in Preferences)
+- **Repo windows**: new terminals in a repo's window open at that repo's root
+- **⌘⇧G** sorts your windows any time (restarts into the new layout)
+
 ### Productivity
 - **Quick commands** — My Commands list plus pre-built AI prompts: *What are we working on?*, *Remember this*, *Resume later*
 - **Saved layouts** — save and restore named layouts across restarts
@@ -66,6 +73,7 @@ Launch from Spotlight / Launchpad. If macOS blocks it (unsigned build), right-cl
 | Extend selection | Shift+Arrows (from the cursor, or from a double-clicked word) |
 | Cycle panes | Ctrl+Tab / Ctrl+Shift+Tab |
 | Next / previous pane | ⌘] / ⌘[ |
+| Consolidate windows by repo | ⌘⇧G |
 | Span displays | ⌘D |
 | Mute bell | ⌘M |
 | Toggle alerts | ⌘E |
