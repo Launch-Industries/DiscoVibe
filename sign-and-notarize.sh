@@ -2,7 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-# Loads local Apple credentials and produces SIGNED + NOTARIZED DiscoVibe DMG, PKG, and ZIP
+# Loads local Apple credentials and produces SIGNED + NOTARIZED DiscoVibe DMG and ZIP
 # for both Apple Silicon (arm64) and Intel (x64).
 # Prereqs (one-time): Developer ID Application cert in keychain + filled-in .env.notarize
 
