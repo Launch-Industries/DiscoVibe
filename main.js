@@ -217,7 +217,12 @@ function createWindow(display, role, key) {
   persistWindows();
   // Update the registry only when closing a window while others remain; closing the
   // last window (or quitting) leaves the snapshot intact so everything reopens next launch.
-  win.on('closed', () => { windows.delete(win); if (!isQuitting && windows.size > 0) persistWindows(); });
+  const wcId = win.webContents.id;
+  win.on('closed', () => {
+    windows.delete(win);
+    paneRegistry.delete(wcId); publishPaneRegistry();
+    if (!isQuitting && windows.size > 0) persistWindows();
+  });
   return win;
 }
 
@@ -523,7 +528,8 @@ ipcMain.handle('session-index', () => {
     let files;
     try { files = fs.readdirSync(path.join(root, d)).filter((f) => f.endsWith('.jsonl')); } catch (_) { continue; }
     for (const f of files) {
-      const m = readSessionMeta(path.join(root, d, f));
+      // Cached on size+mtime: the sidebar asks for this every minute.
+      const m = readSessionMetaCached(path.join(root, d, f));
       if (!m) continue;
       const st = status[m.id] || null;
       const nm = names[m.id] || null;
@@ -1106,6 +1112,57 @@ function broadcastDisplays() {
 // Relay a message to every window (used for global settings like title size).
 ipcMain.on('open-external', (_e, { url }) => { shell.openExternal(url).catch(() => {}); });
 
+// ---- Sidebar: every pane in every window --------------------------------------
+// Each window reports its panes (name, conversation, status) whenever they
+// change. Main keeps the latest report per window and hands the whole set to
+// every window, so one sidebar can show what is waiting across all of them,
+// and the Dock badge counts the panes that need you.
+const paneRegistry = new Map();     // webContents id -> { key, name, repoRoot, panes }
+let registryTimer = null;
+function registrySnapshot() {
+  const out = [];
+  for (const w of windows) {
+    if (w.isDestroyed()) continue;
+    const r = paneRegistry.get(w.webContents.id);
+    if (r) out.push({ wcId: w.webContents.id, focused: w.isFocused(), ...r });
+  }
+  return out;
+}
+function publishPaneRegistry() {
+  if (registryTimer) return;
+  registryTimer = setTimeout(() => {
+    registryTimer = null;
+    const snap = registrySnapshot();
+    for (const w of windows) if (!w.isDestroyed()) w.webContents.send('pane-registry', snap);
+    const waiting = snap.reduce((n, r) => n + (r.panes || []).filter((p) => p.state === 'waiting').length, 0);
+    if (process.platform === 'darwin' && app.dock) app.dock.setBadge(waiting ? String(waiting) : '');
+  }, 250);
+}
+ipcMain.on('pane-status', (event, report = {}) => {
+  paneRegistry.set(event.sender.id, {
+    key: String(report.key || ''), name: String(report.name || ''), repoRoot: String(report.repoRoot || ''),
+    panes: Array.isArray(report.panes) ? report.panes.slice(0, 60) : [],
+  });
+  publishPaneRegistry();
+});
+ipcMain.handle('pane-registry', () => registrySnapshot());
+// Bring a pane forward, in whichever window holds it.
+ipcMain.on('focus-pane', (_e, { wcId, paneId } = {}) => {
+  const w = [...windows].find((x) => !x.isDestroyed() && x.webContents.id === wcId);
+  if (!w) return;
+  if (w.isMinimized()) w.restore();
+  w.show(); w.focus();
+  w.webContents.send('focus-pane', { paneId });
+});
+// Resume a conversation in the window that owns its repo (or the asking one).
+ipcMain.on('resume-in', (event, { wcId, session } = {}) => {
+  const w = [...windows].find((x) => !x.isDestroyed() && x.webContents.id === wcId)
+    || BrowserWindow.fromWebContents(event.sender);
+  if (!w) return;
+  w.show(); w.focus();
+  w.webContents.send('resume-in', { session });
+});
+
 ipcMain.on('broadcast', (event, payload) => {
   for (const w of windows) {
     if (!w.isDestroyed() && w.webContents.id !== event.sender.id) {
@@ -1142,6 +1199,8 @@ function buildMenu() {
         { label: 'New Terminal (⌘T)', accelerator: 'CmdOrCtrl+T', click: () => sendToFocused('new-terminal') },
         { label: 'Close Terminal', accelerator: 'CmdOrCtrl+W', click: () => sendToFocused('close-terminal') },
         { label: 'Close Terminal for Good', accelerator: 'CmdOrCtrl+Alt+W', click: () => sendToFocused('close-for-good') },
+        { label: 'Show / Hide Sidebar', accelerator: 'CmdOrCtrl+Shift+B', click: () => sendToFocused('toggle-sidebar') },
+        { label: 'Jump to Next Terminal Waiting on You', accelerator: 'CmdOrCtrl+J', click: () => sendToFocused('next-waiting') },
         { label: 'Reopen Closed Terminal', accelerator: 'CmdOrCtrl+Shift+T', click: () => sendToFocused('reopen-closed') },
         { label: 'Recover Session…', accelerator: 'CmdOrCtrl+Shift+R', click: () => sendToFocused('recover-sessions') },
         { label: 'Resume All Conversations', accelerator: 'CmdOrCtrl+Shift+O', click: () => sendToFocused('resume-all') },

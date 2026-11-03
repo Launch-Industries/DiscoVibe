@@ -51,6 +51,15 @@ contextBridge.exposeInMainWorld('api', {
   relaunch: () => ipcRenderer.send('relaunch'),
   claimResume: (sessionId, paneId) => ipcRenderer.invoke('claim-resume', { sessionId, paneId }),
 
+  // Sidebar: panes across every window
+  reportPanes: (report) => ipcRenderer.send('pane-status', report),
+  paneRegistry: () => ipcRenderer.invoke('pane-registry'),
+  onPaneRegistry: (cb) => ipcRenderer.on('pane-registry', (_e, snap) => cb(snap)),
+  focusPane: (wcId, paneId) => ipcRenderer.send('focus-pane', { wcId, paneId }),
+  onFocusPane: (cb) => ipcRenderer.on('focus-pane', (_e, payload) => cb(payload)),
+  resumeIn: (wcId, session) => ipcRenderer.send('resume-in', { wcId, session }),
+  onResumeIn: (cb) => ipcRenderer.on('resume-in', (_e, payload) => cb(payload)),
+
   // Companion browser / folders
   pickFile: () => ipcRenderer.invoke('pick-file'),
   pickFolder: () => ipcRenderer.invoke('pick-folder'),

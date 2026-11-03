@@ -365,7 +365,10 @@ function fitPane(pane) {
   try {
     pane.fitAddon.fit();
     const { cols, rows } = pane.term;
-    if (cols > 0 && rows > 0) window.api.resize(pane.id, cols, rows);
+    if (cols > 0 && rows > 0 && (cols !== pane._cols || rows !== pane._rows)) {
+      pane._cols = cols; pane._rows = rows; pane.resizedAt = Date.now();   // the shell redraws; not real work
+      window.api.resize(pane.id, cols, rows);
+    }
   } catch (_) {}
 }
 
@@ -541,7 +544,7 @@ function createPane(opts = {}) {
   // PTY <-> terminal
   term.onData((data) => { window.api.input(id, data); pane.lastActivity = Date.now(); pane.lastKeypress = Date.now(); clearAttention(pane); });
   term.onResize(({ cols, rows }) => window.api.resize(id, cols, rows));
-  term.onBell(() => triggerAttention(pane));
+  term.onBell(() => { if (Date.now() - (pane.lastKeypress || 0) >= 2000) pane.bellAt = Date.now(); triggerAttention(pane); });
 
   // Follow the terminal title (OSC) — update the AI name field, not the user's name.
   term.onTitleChange((title) => {
@@ -3167,6 +3170,8 @@ window.api.onMenu((action) => {
   else if (action === 'resume-all') resumeAllPanes(false);
   else if (action === 'work-tracker') openWorkTracker();
   else if (action === 'close-terminal' && focusedId) closePane(focusedId);
+  else if (action === 'toggle-sidebar') setSidebar(!sidebarOpen);
+  else if (action === 'next-waiting') jumpToNextWaiting();
   else if (action === 'close-for-good' && focusedId) closeForGood(panes.find((p) => p.id === focusedId));
   else if (action === 'reopen-closed') reopenClosed();
   else if (action === 'kill-all') killAll();
