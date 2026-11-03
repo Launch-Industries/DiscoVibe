@@ -200,23 +200,34 @@ function renderSidebar() {
 
   const top = document.createElement('div'); top.className = 'sb-top';
   top.innerHTML = `<span class="sb-title">${lic('list-checks')} Sessions</span>`;
-  const hide = document.createElement('button'); hide.className = 'sb-x'; hide.innerHTML = lic('panel-right-close');
+  const hide = document.createElement('button'); hide.className = 'sb-x'; hide.innerHTML = lic('panel-left-close');
   hide.title = 'Hide sidebar (⌘⇧B)';
   hide.addEventListener('click', () => setSidebar(false));
   top.appendChild(hide);
   sidebarEl.appendChild(top);
 
+  // Search sits at the top and filters every section, not just Unfinished.
+  const search = document.createElement('input'); search.type = 'search'; search.className = 'sb-search';
+  search.placeholder = 'Search sessions…'; search.value = sidebarSearch; search.spellcheck = false;
+  search.addEventListener('input', () => { sidebarSearch = search.value; sidebarShowAll = false; renderSidebar(); });
+  search.addEventListener('keydown', (e) => { if (e.key === 'Escape' && search.value) { e.stopPropagation(); sidebarSearch = ''; renderSidebar(); } });
+  const sw = document.createElement('div'); sw.className = 'sb-searchwrap'; sw.appendChild(search);
+  sidebarEl.appendChild(sw);
+
   const body = document.createElement('div'); body.className = 'sb-scroll';
   sidebarEl.appendChild(body);
 
-  const all = allPanes();
+  const q = sidebarSearch.trim().toLowerCase();
+  const hit = (...vals) => !q || vals.some((v) => String(v || '').toLowerCase().includes(q));
+  const allOpen = allPanes();
+  const all = allOpen.filter((p) => hit(p.name, p.winName));
   const multiWin = sidebarRegistry.length > 1;
   const waiting = all.filter((p) => p.state === 'waiting').sort((a, b) => a.since - b.since);
   const working = all.filter((p) => p.state === 'working');
   const idle = all.filter((p) => p.state === 'idle');
 
   const w = section('Needs you', waiting.length, 'sb-needs');
-  if (!waiting.length) { const e = document.createElement('div'); e.className = 'sb-empty'; e.textContent = 'Nothing waiting. ⌘J jumps to the next one when there is.'; w.body.appendChild(e); }
+  if (!waiting.length) { const e = document.createElement('div'); e.className = 'sb-empty'; e.textContent = q ? 'Nothing matches.' : 'Nothing waiting. ⌘J jumps to the next one when there is.'; w.body.appendChild(e); }
   waiting.forEach((p) => w.body.appendChild(paneRow(p, multiWin)));
   body.appendChild(w.wrap);
 
@@ -234,16 +245,11 @@ function renderSidebar() {
   }
 
   // Unfinished conversations that are not open in any pane.
-  const openIds = new Set(all.map((p) => p.sessionId).filter(Boolean));
-  const q = sidebarSearch.trim().toLowerCase();
+  const openIds = new Set(allOpen.map((p) => p.sessionId).filter(Boolean));
   const unfinished = (sidebarSessions || [])
     .filter((s) => !s.completedAt && !openIds.has(s.id))
-    .filter((s) => !q || [s.paneName, s.title, s.cwd, s.lastPrompt].some((v) => String(v || '').toLowerCase().includes(q)));
+    .filter((s) => hit(s.paneName, s.title, s.cwd, s.lastPrompt));
   const u = section('Unfinished, not open', sidebarSessions ? unfinished.length : '…', 'sb-unfinished');
-  const search = document.createElement('input'); search.type = 'search'; search.className = 'sb-search';
-  search.placeholder = 'Search unfinished…'; search.value = sidebarSearch; search.spellcheck = false;
-  search.addEventListener('input', () => { sidebarSearch = search.value; sidebarShowAll = false; renderSidebar(); });
-  u.body.appendChild(search);
   const shown = sidebarShowAll ? unfinished : unfinished.slice(0, SIDEBAR_UNFINISHED_PAGE);
   for (const s of shown) {
     const row = document.createElement('div'); row.className = 'sb-row sb-sess';
@@ -295,7 +301,7 @@ setInterval(() => { if (sidebarOpen) scheduleSidebar(); }, 30000);
   const b = document.createElement('button');
   b.id = 'btn-sidebar'; b.className = 'tb-btn';
   b.title = 'Sessions sidebar (⌘⇧B)'; b.setAttribute('data-tooltip', 'Sessions sidebar (⌘⇧B)');
-  b.innerHTML = lic('panel-right');
+  b.innerHTML = lic('panel-left');
   b.addEventListener('click', () => setSidebar(!sidebarOpen));
   work.after(b);
 })();

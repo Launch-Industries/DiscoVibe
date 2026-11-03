@@ -660,11 +660,11 @@ body.light .cons-seg button.on, body.light .cons-go { color: #fff; }
 
 /* ── Sessions sidebar ───────────────────────────────────────────────────── */
 body.sidebar-on { --side-w: 380px; }
-#grid { right: var(--side-w, 0px); }
+#grid { left: var(--side-w, 0px); }
 #sidebar {
-  position: absolute; top: var(--tb-h); right: 0; bottom: var(--tray-h, 0px);
+  position: absolute; top: var(--tb-h); left: 0; bottom: var(--tray-h, 0px);
   width: var(--side-w, 0px); display: none; flex-direction: column;
-  border-left: 1px solid var(--pop-line); background: var(--pop-bg);
+  border-right: 1px solid var(--pop-line); background: var(--pop-bg);
   color: var(--chrome-fg); z-index: 2; font-size: 15px; overflow: hidden;
 }
 body.sidebar-on #sidebar { display: flex; }
@@ -674,6 +674,8 @@ body.sidebar-on #sidebar { display: flex; }
 .sb-x { background: none; border: 0; color: inherit; opacity: .7; cursor: pointer; padding: 4px; border-radius: 6px; display: inline-flex; }
 .sb-x:hover { opacity: 1; background: var(--btn-bg); }
 .sb-x svg { width: 16px; height: 16px; }
+.sb-searchwrap { padding: 0 12px 6px; flex: 0 0 auto; }
+.sb-searchwrap .sb-search { margin: 0; }
 .sb-scroll { flex: 1 1 auto; overflow-y: auto; padding: 0 8px 12px; }
 .sb-sec { margin-top: 10px; }
 .sb-hd {
