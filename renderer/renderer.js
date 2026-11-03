@@ -2045,7 +2045,7 @@ function fmtSize(n) {
 async function openRecovery() {
   if (document.getElementById('recover')) return;
   const ov = document.createElement('div'); ov.id = 'recover';
-  const card = document.createElement('div'); card.className = 'ob-card'; card.style.maxWidth = '760px';
+  const card = document.createElement('div'); card.className = 'ob-card ob-wide';
   ov.appendChild(card);
   const close = () => ov.remove();
   ov.addEventListener('mousedown', (e) => { if (e.target === ov) close(); });
@@ -2171,7 +2171,7 @@ let workShowDone = false;
 
 async function openWorkTracker() {
   const ov = document.createElement('div'); ov.id = 'recover';
-  const card = document.createElement('div'); card.className = 'ob-card'; card.style.maxWidth = '820px';
+  const card = document.createElement('div'); card.className = 'ob-card ob-wide';
   ov.appendChild(card);
   const close = () => ov.remove();
   ov.addEventListener('mousedown', (e) => { if (e.target === ov) close(); });
@@ -2194,8 +2194,8 @@ async function openWorkTracker() {
   card.appendChild(list);
 
   const actions = document.createElement('div'); actions.className = 'ob-actions';
-  const toggle = document.createElement('button');
-  const done = document.createElement('button'); done.textContent = 'Done';
+  const toggle = document.createElement('button'); toggle.className = 'ob-skip';
+  const done = document.createElement('button'); done.className = 'ob-skip'; done.textContent = 'Done';
   done.addEventListener('click', close);
   actions.append(toggle, done);
   card.appendChild(actions);
@@ -2323,7 +2323,7 @@ async function viewTranscript(s) {
   const r = await window.api.readTranscript(s.base);
   if (!r || !r.ok) { flashMsg('Could not read transcript'); return; }
   const ov = document.createElement('div'); ov.id = 'recover';
-  const card = document.createElement('div'); card.className = 'ob-card'; card.style.maxWidth = '900px';
+  const card = document.createElement('div'); card.className = 'ob-card ob-wide';
   ov.appendChild(card);
   const close = () => ov.remove();
   ov.addEventListener('mousedown', (e) => { if (e.target === ov) close(); });

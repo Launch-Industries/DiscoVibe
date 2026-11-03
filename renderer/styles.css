@@ -513,7 +513,15 @@ body.dim-inactive .pane:not(.focused) .pane-body { filter: brightness(var(--dim-
 .layout-empty { opacity: .55; font-size: 12px; padding: 6px 2px; }
 
 /* Session recovery */
-.rec-list { max-height: 52vh; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
+.ob-card.ob-wide { width: 1400px; max-width: 94vw; max-height: 92vh; padding: 26px; }
+.ob-wide .ob-head { font-size: 20px; }
+.ob-wide .ob-sub { font-size: 14px; }
+.ob-wide .rec-name { font-size: 15px; }
+.ob-wide .rec-meta { font-size: 13px; }
+.ob-wide .rec-prev { font-size: 13px; }
+.ob-wide .rec-btns button { font-size: 13px; padding: 6px 11px; }
+.ob-wide .rec-row { padding: 12px 14px; }
+.rec-list { max-height: 70vh; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
 .rec-row {
   display: flex; align-items: flex-start; gap: 12px;
   padding: 10px 12px; border-radius: 10px;
@@ -540,7 +548,7 @@ body.dim-inactive .pane:not(.focused) .pane-body { filter: brightness(var(--dim-
 }
 .rec-btns button:hover { background: var(--btn-bg-hover); }
 .rec-body {
-  max-height: 58vh; overflow: auto; margin: 0; padding: 12px;
+  max-height: 72vh; overflow: auto; margin: 0; padding: 12px;
   border-radius: 10px; border: 1px solid var(--pop-line); background: var(--btn-bg);
   font-family: ui-monospace, Menlo, monospace; font-size: 12px; line-height: 1.45;
   white-space: pre-wrap; word-break: break-word; user-select: text;
