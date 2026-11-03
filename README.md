@@ -65,7 +65,7 @@ Launch from Spotlight / Launchpad. If macOS blocks it (unsigned build), right-cl
 | Action | Shortcut |
 |---|---|
 | New terminal | ⌘T or ⌘N |
-| Show / hide the Sessions sidebar | ⌘⇧B |
+| Show / hide the Sessions sidebar (left or right: use its Move button; the yellow Sessions tab brings it back) | ⌘⇧B |
 | Jump to the next terminal waiting on you (any window) | ⌘J |
 | Close terminal | ⌘W |
 | Close terminal for good (finished work: not in Recently closed or Recover, conversation marked done) | ⌘⌥W or Option-click × |

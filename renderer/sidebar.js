@@ -17,7 +17,15 @@ const WORKING_WINDOW_MS = 4000;     // output this recent, and not your own typi
 const QUESTION_QUIET_MS = 3000;     // quiet this long before a visible question counts
 
 let sidebarOpen = true;
-try { const v = JSON.parse(localStorage.getItem(SIDEBAR_KEY)); if (v && typeof v.open === 'boolean') sidebarOpen = v.open; } catch (_) {}
+let sidebarSide = 'left';            // 'left' or 'right', your pick
+try {
+  const v = JSON.parse(localStorage.getItem(SIDEBAR_KEY));
+  if (v && typeof v.open === 'boolean') sidebarOpen = v.open;
+  if (v && (v.side === 'left' || v.side === 'right')) sidebarSide = v.side;
+} catch (_) {}
+function saveSidebarPrefs() {
+  try { localStorage.setItem(SIDEBAR_KEY, JSON.stringify({ open: sidebarOpen, side: sidebarSide })); } catch (_) {}
+}
 let sidebarRegistry = [];
 let sidebarSessions = null;          // from sessionIndex, refreshed every minute while open
 let sidebarSessionsAt = 0;
@@ -128,9 +136,31 @@ const sidebarEl = document.createElement('aside');
 sidebarEl.id = 'sidebar';
 document.body.appendChild(sidebarEl);
 
+// When the sidebar is hidden, a labelled tab stays on that edge so it is easy to bring back.
+const sidebarTab = document.createElement('button');
+sidebarTab.id = 'sidebar-tab';
+sidebarTab.title = 'Show the Sessions sidebar (⌘⇧B)';
+sidebarTab.addEventListener('click', () => setSidebar(true));
+document.body.appendChild(sidebarTab);
+
+function applySidebarSide() {
+  document.body.classList.toggle('sidebar-right', sidebarSide === 'right');
+  sidebarTab.innerHTML = lic(sidebarSide === 'right' ? 'chevron-left' : 'chevron-right') + '<span>Sessions</span>';
+  const btn = document.getElementById('btn-sidebar');
+  if (btn) { btn.innerHTML = lic(sidebarSide === 'right' ? 'panel-right' : 'panel-left'); }
+  renderIcons();
+}
+function setSidebarSide(side) {
+  sidebarSide = side === 'right' ? 'right' : 'left';
+  saveSidebarPrefs();
+  applySidebarSide();
+  renderSidebar();
+  requestAnimationFrame(() => { relayout(); panes.forEach(fitPane); });
+}
+
 function setSidebar(open) {
   sidebarOpen = !!open;
-  try { localStorage.setItem(SIDEBAR_KEY, JSON.stringify({ open: sidebarOpen })); } catch (_) {}
+  saveSidebarPrefs();
   document.body.classList.toggle('sidebar-on', sidebarOpen);
   const btn = document.getElementById('btn-sidebar');
   if (btn) btn.classList.toggle('active', sidebarOpen);
@@ -200,10 +230,18 @@ function renderSidebar() {
 
   const top = document.createElement('div'); top.className = 'sb-top';
   top.innerHTML = `<span class="sb-title">${lic('list-checks')} Sessions</span>`;
-  const hide = document.createElement('button'); hide.className = 'sb-x'; hide.innerHTML = lic('panel-left-close');
-  hide.title = 'Hide sidebar (⌘⇧B)';
+  const tools = document.createElement('span'); tools.className = 'sb-tools';
+  const other = sidebarSide === 'left' ? 'right' : 'left';
+  const swap = document.createElement('button'); swap.className = 'sb-x';
+  swap.innerHTML = lic('arrow-left-right') + `<span>Move ${other}</span>`;
+  swap.title = `Put the sidebar on the ${other} side`;
+  swap.addEventListener('click', () => setSidebarSide(other));
+  const hide = document.createElement('button'); hide.className = 'sb-x sb-hide';
+  hide.innerHTML = lic(sidebarSide === 'left' ? 'panel-left-close' : 'panel-right-close') + '<span>Hide</span>';
+  hide.title = 'Hide the sidebar (⌘⇧B)';
   hide.addEventListener('click', () => setSidebar(false));
-  top.appendChild(hide);
+  tools.append(swap, hide);
+  top.appendChild(tools);
   sidebarEl.appendChild(top);
 
   // Search sits at the top and filters every section, not just Unfinished.
@@ -305,6 +343,7 @@ setInterval(() => { if (sidebarOpen) scheduleSidebar(); }, 30000);
   b.addEventListener('click', () => setSidebar(!sidebarOpen));
   work.after(b);
 })();
+applySidebarSide();
 
 window.api.paneRegistry().then((snap) => { sidebarRegistry = Array.isArray(snap) ? snap : []; setSidebar(sidebarOpen); }).catch(() => setSidebar(sidebarOpen));
 reportPanes();
