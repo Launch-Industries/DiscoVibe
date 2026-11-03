@@ -520,7 +520,7 @@ body.dim-inactive .pane:not(.focused) .pane-body { filter: brightness(var(--dim-
   border: 1px solid var(--pop-line); background: var(--btn-bg);
   border-left: 4px solid var(--rec-color, var(--pop-line));
 }
-.rec-info { flex: 1 1 auto; min-width: 0; }
+.rec-info { flex: 1 1 220px; min-width: 0; }
 .rec-name { font-weight: 700; font-size: 13px; display: flex; align-items: center; gap: 8px; }
 .rec-live {
   font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px;
@@ -531,7 +531,8 @@ body.dim-inactive .pane:not(.focused) .pane-body { filter: brightness(var(--dim-
   font-family: ui-monospace, Menlo, monospace; font-size: 11px; opacity: .7;
   margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.rec-btns { display: flex; flex-wrap: wrap; gap: 6px; flex: 0 0 auto; }
+.rec-btns { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; flex: 0 1 auto; max-width: 60%; }
+.rec-btns button:disabled { opacity: .4; cursor: default; }
 .rec-btns button {
   display: inline-flex; align-items: center; gap: 5px; cursor: pointer;
   font-size: 12px; font-weight: 600; padding: 5px 9px; border-radius: 8px;

@@ -809,7 +809,7 @@ function createPane(opts = {}) {
   });
 
   collapseBtn.addEventListener('click', () => collapsePane(pane));
-  closeBtn.addEventListener('click', () => closePane(id));
+  closeBtn.addEventListener('click', (e) => { if (e.altKey) closeForGood(pane); else closePane(id); });
 
   // Drag to reorder (via grip)
   grip.addEventListener('dragstart', (e) => {
@@ -989,8 +989,8 @@ function renderTray() {
     text.textContent = pane.nameInput.value || pane.name;
     chip.appendChild(text);
     const x = document.createElement('span');
-    x.className = 'chip-x'; x.innerHTML = lic('x'); x.title = 'Close stored terminal';
-    x.addEventListener('click', (e) => { e.stopPropagation(); closeStored(pane); });
+    x.className = 'chip-x'; x.innerHTML = lic('x'); x.title = 'Close stored terminal (Option-click: close for good)';
+    x.addEventListener('click', (e) => { e.stopPropagation(); if (e.altKey) closeForGood(pane); else closeStored(pane); });
     chip.appendChild(x);
     chip.addEventListener('click', () => restorePane(pane));
     trayEl.appendChild(chip);
@@ -1985,9 +1985,32 @@ function recordClosed(pane) {
     webUrl: pane.webUrl || '',
     cwd: pane.cwd || '',
     transcript: pane.transcript || '',
+    aiSessionId: pane.aiSessionId || '',
     closedAt: Date.now()
   });
   saveClosed(list);
+}
+
+// "Closed for good": the work is finished. The pane goes away without landing
+// in Recently closed, its transcript is hidden from Recover a session, and its
+// Claude conversation is ticked off in Outstanding work. Nothing is deleted;
+// "Show closed" in Recover a session and "Show completed" in Outstanding work
+// bring either back.
+async function markClosedForGood({ transcript, aiSessionId }) {
+  if (transcript) { try { await window.api.markTranscriptClosed(transcript, true); } catch (_) {} }
+  if (aiSessionId) { try { await window.api.sessionComplete(aiSessionId, true); } catch (_) {} }
+  const list = loadClosed().filter((e) => !(transcript && e.transcript === transcript)
+    && !(aiSessionId && e.aiSessionId === aiSessionId));
+  saveClosed(list);
+}
+async function closeForGood(pane) {
+  if (!pane) return;
+  if (!pane.collapsed && panes.length === 1 && stored.length === 0) {
+    if (!confirm('Close the last terminal for good? This window will close.')) return;
+  }
+  await markClosedForGood({ transcript: pane.transcript, aiSessionId: pane.aiSessionId });
+  if (pane.collapsed) closeStored(pane, true); else closePane(pane.id, true);
+  flashMsg('Closed for good');
 }
 function reopenClosed(entry) {
   const list = loadClosed();
@@ -2045,9 +2068,12 @@ async function openRecovery() {
   card.appendChild(list);
 
   const actions = document.createElement('div'); actions.className = 'ob-actions';
+  let showClosed = false;
+  const closedToggle = document.createElement('button'); closedToggle.className = 'ob-skip';
+  closedToggle.addEventListener('click', () => { showClosed = !showClosed; render(); });
   const done = document.createElement('button'); done.className = 'ob-skip'; done.textContent = 'Close';
   done.addEventListener('click', close);
-  actions.appendChild(done);
+  actions.append(closedToggle, done);
   card.appendChild(actions);
 
   document.body.appendChild(ov);
@@ -2058,14 +2084,19 @@ async function openRecovery() {
 
   const render = () => {
     const q = search.value.trim().toLowerCase();
-    const shown = sessions.filter((s) => !q
+    const closedCount = sessions.filter((s) => s.closedForGood).length;
+    closedToggle.textContent = showClosed ? `← Open sessions` : `Show closed (${closedCount})`;
+    closedToggle.style.display = closedCount || showClosed ? '' : 'none';
+    const shown = sessions.filter((s) => !!s.closedForGood === showClosed).filter((s) => !q
       || (s.name || '').toLowerCase().includes(q)
       || (s.cwd || '').toLowerCase().includes(q)
       || (s.preview || '').toLowerCase().includes(q));
     list.innerHTML = '';
     if (!shown.length) {
       const empty = document.createElement('div'); empty.className = 'layout-empty';
-      empty.textContent = sessions.length ? 'Nothing matches that search.' : 'No recorded sessions yet. New terminals are recorded from now on.';
+      empty.textContent = !sessions.length ? 'No recorded sessions yet. New terminals are recorded from now on.'
+        : q ? 'Nothing matches that search.'
+        : showClosed ? 'Nothing closed for good yet.' : 'Nothing left to recover. Everything here is closed.';
       list.appendChild(empty);
       return;
     }
@@ -2089,7 +2120,7 @@ async function openRecovery() {
       const reopen = document.createElement('button'); reopen.innerHTML = lic('rotate-ccw') + '<span>Reopen here</span>';
       reopen.title = s.cwd ? 'New terminal in ' + s.cwd : 'New terminal';
       reopen.addEventListener('click', () => { addPane({ name: s.name, color: s.color, cwd: s.cwd }); close(); });
-      const save = document.createElement('button'); save.innerHTML = lic('save') + '<span>Save…</span>';
+      const save = document.createElement('button'); save.innerHTML = lic('save'); save.title = 'Save the transcript to a file…';
       save.addEventListener('click', async () => {
         const r = await window.api.readTranscript(s.base);
         if (!r || !r.ok) { flashMsg('Could not read transcript'); return; }
@@ -2104,7 +2135,19 @@ async function openRecovery() {
         sessions = sessions.filter((x) => x.base !== s.base);
         render();
       });
-      btns.append(view, reopen, save, del);
+      const mark = document.createElement('button');
+      mark.innerHTML = lic(s.closedForGood ? 'undo-2' : 'check') + `<span>${s.closedForGood ? 'Put back' : 'Mark closed'}</span>`;
+      mark.title = s.closedForGood ? 'Put this back in the list' : 'Closed for good: hide it from this list (the transcript is kept)';
+      mark.addEventListener('click', async () => {
+        const next = !s.closedForGood;
+        const r = await window.api.markTranscriptClosed(s.base, next);
+        if (!r || !r.ok) { flashMsg('Could not update'); return; }
+        if (next) s.closedForGood = Date.now(); else delete s.closedForGood;
+        if (next) saveClosed(loadClosed().filter((e) => e.transcript !== s.base));
+        render();
+      });
+      if (s.active) mark.disabled = true, mark.title = 'Still open. Close the terminal for good with ⌘⌥W instead.';
+      btns.append(view, reopen, save, mark, del);
 
       row.append(info, btns);
       list.appendChild(row);
@@ -2617,7 +2660,15 @@ function openCommands(anchor) {
       reopen.innerHTML = lic('rotate-ccw') + `<span>${(entry.name || 'Terminal').replace(/</g, '&lt;')}</span>`;
       reopen.title = 'Reopen (fresh shell, same name/color)';
       reopen.addEventListener('click', () => { reopenClosed(entry); closePopover(); });
-      row.append(dot, reopen);
+      const done = document.createElement('button'); done.innerHTML = lic('check');
+      done.title = 'Closed for good: remove from this list, hide from Recover a session, and mark its conversation done';
+      done.addEventListener('click', async () => {
+        await markClosedForGood(entry);
+        const l = loadClosed(); const i = l.findIndex((e) => e.closedAt === entry.closedAt && e.name === entry.name);
+        if (i >= 0) { l.splice(i, 1); saveClosed(l); }
+        openCommands(anchor);
+      });
+      row.append(dot, reopen, done);
       rcList.appendChild(row);
     });
   }
@@ -3116,6 +3167,7 @@ window.api.onMenu((action) => {
   else if (action === 'resume-all') resumeAllPanes(false);
   else if (action === 'work-tracker') openWorkTracker();
   else if (action === 'close-terminal' && focusedId) closePane(focusedId);
+  else if (action === 'close-for-good' && focusedId) closeForGood(panes.find((p) => p.id === focusedId));
   else if (action === 'reopen-closed') reopenClosed();
   else if (action === 'kill-all') killAll();
   else if (action === 'clear') { const p = focusedPane(); if (p) { p.term.clear(); p.term.focus(); } }

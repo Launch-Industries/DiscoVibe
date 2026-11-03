@@ -890,6 +890,22 @@ ipcMain.handle('reveal-transcript', (_e, { base }) => {
   return { ok: fs.existsSync(file), path: file };
 });
 
+// "Closed for good" hides a transcript from Recover a session without deleting
+// it. The live record is patched too, or the pane's own close (which rewrites
+// the meta file from memory) would put the old meta straight back.
+ipcMain.handle('transcript-mark-closed', (_e, { base, closed } = {}) => {
+  const b = path.basename(String(base || ''));
+  if (!b) return { ok: false };
+  const file = path.join(transcriptsDir(), b + '.json');
+  let meta;
+  try { meta = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return { ok: false }; }
+  const apply = (m) => { if (closed) m.closedForGood = Date.now(); else delete m.closedForGood; };
+  apply(meta);
+  for (const rec of transcripts.values()) if (rec.meta.base === b) apply(rec.meta);
+  try { fs.writeFileSync(file, JSON.stringify(meta), 'utf8'); } catch (_) { return { ok: false }; }
+  return { ok: true };
+});
+
 ipcMain.on('transcript-meta', (_e, { id, patch }) => transcriptUpdate(id, patch));
 
 // ---- PTY lifecycle over IPC -------------------------------------------------
@@ -1125,6 +1141,7 @@ function buildMenu() {
         { label: 'New Terminal', accelerator: 'CmdOrCtrl+N', click: () => sendToFocused('new-terminal') },
         { label: 'New Terminal (⌘T)', accelerator: 'CmdOrCtrl+T', click: () => sendToFocused('new-terminal') },
         { label: 'Close Terminal', accelerator: 'CmdOrCtrl+W', click: () => sendToFocused('close-terminal') },
+        { label: 'Close Terminal for Good', accelerator: 'CmdOrCtrl+Alt+W', click: () => sendToFocused('close-for-good') },
         { label: 'Reopen Closed Terminal', accelerator: 'CmdOrCtrl+Shift+T', click: () => sendToFocused('reopen-closed') },
         { label: 'Recover Session…', accelerator: 'CmdOrCtrl+Shift+R', click: () => sendToFocused('recover-sessions') },
         { label: 'Resume All Conversations', accelerator: 'CmdOrCtrl+Shift+O', click: () => sendToFocused('resume-all') },

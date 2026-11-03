@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld('api', {
   // Session transcripts (recover a closed terminal's output)
   listTranscripts: () => ipcRenderer.invoke('list-transcripts'),
   readTranscript: (base) => ipcRenderer.invoke('read-transcript', { base }),
+  markTranscriptClosed: (base, closed) => ipcRenderer.invoke('transcript-mark-closed', { base, closed }),
   deleteTranscript: (base) => ipcRenderer.invoke('delete-transcript', { base }),
   revealTranscript: (base) => ipcRenderer.invoke('reveal-transcript', { base }),
   transcriptMeta: (id, patch) => ipcRenderer.send('transcript-meta', { id, patch }),

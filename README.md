@@ -66,6 +66,7 @@ Launch from Spotlight / Launchpad. If macOS blocks it (unsigned build), right-cl
 |---|---|
 | New terminal | ⌘T or ⌘N |
 | Close terminal | ⌘W |
+| Close terminal for good (finished work: not in Recently closed or Recover, conversation marked done) | ⌘⌥W or Option-click × |
 | Clear terminal | ⌘K |
 | Save output | ⌘S |
 | Collapse / store | ⌘⇧S |
