@@ -328,10 +328,11 @@ function repaintPanes(list) {
   for (const p of targets) {
     try {
       if (p.webgl) { try { p.webgl.dispose(); } catch (_) {} p.webgl = null; }
-      p.fitAddon.fit();
+      const d = p.fitAddon.proposeDimensions && p.fitAddon.proposeDimensions();
+      if (d && d.cols >= MIN_COLS && d.rows >= MIN_ROWS) p.fitAddon.fit();
       p.term.refresh(0, Math.max(0, p.term.rows - 1));
       const { cols, rows } = p.term;
-      if (cols > 0 && rows > 0) window.api.resize(p.id, cols, rows);
+      if (cols >= MIN_COLS && rows >= MIN_ROWS) { p._cols = cols; p._rows = rows; window.api.resize(p.id, cols, rows); }
     } catch (_) {}
   }
   flashMsg(targets.length === 1 ? 'Repainted this terminal' : 'Repainted ' + targets.length + ' terminals');
@@ -361,14 +362,26 @@ function relayout() {
   renderIcons();
   requestAnimationFrame(() => panes.forEach(fitPane));
 }
+// A pane mid-layout (window still opening, grid rows being rebuilt, sidebar
+// sliding in) can measure only a few columns wide for a frame. Telling the
+// shell that size makes Claude Code redraw its whole screen ~10 columns wide,
+// and that wrapped text stays in the scrollback after the pane widens again.
+// So: never fit to a size that small, and only tell the PTY once the size has
+// held still for a moment.
+const MIN_COLS = 20, MIN_ROWS = 5, PTY_RESIZE_SETTLE_MS = 120;
 function fitPane(pane) {
   try {
+    const dims = pane.fitAddon.proposeDimensions && pane.fitAddon.proposeDimensions();
+    if (!dims || !(dims.cols >= MIN_COLS) || !(dims.rows >= MIN_ROWS)) return;
     pane.fitAddon.fit();
-    const { cols, rows } = pane.term;
-    if (cols > 0 && rows > 0 && (cols !== pane._cols || rows !== pane._rows)) {
-      pane._cols = cols; pane._rows = rows; pane.resizedAt = Date.now();   // the shell redraws; not real work
-      window.api.resize(pane.id, cols, rows);
-    }
+    clearTimeout(pane._ptyResizeTimer);
+    pane._ptyResizeTimer = setTimeout(() => {
+      const { cols, rows } = pane.term;
+      if (cols >= MIN_COLS && rows >= MIN_ROWS && (cols !== pane._cols || rows !== pane._rows)) {
+        pane._cols = cols; pane._rows = rows; pane.resizedAt = Date.now();   // the shell redraws; not real work
+        window.api.resize(pane.id, cols, rows);
+      }
+    }, PTY_RESIZE_SETTLE_MS);
   } catch (_) {}
 }
 
@@ -543,7 +556,8 @@ function createPane(opts = {}) {
 
   // PTY <-> terminal
   term.onData((data) => { window.api.input(id, data); pane.lastActivity = Date.now(); pane.lastKeypress = Date.now(); clearAttention(pane); });
-  term.onResize(({ cols, rows }) => window.api.resize(id, cols, rows));
+  // The PTY is resized by fitPane / repaintPanes, after the size settles. Sending
+  // every intermediate xterm resize here made Claude redraw at transient widths.
   term.onBell(() => { if (Date.now() - (pane.lastKeypress || 0) >= 2000) pane.bellAt = Date.now(); triggerAttention(pane); });
 
   // Follow the terminal title (OSC) — update the AI name field, not the user's name.
@@ -846,7 +860,8 @@ function createPane(opts = {}) {
 
   // Spawn the shell. The promise is kept: anything that wants to type into a
   // brand-new pane (the restore pass) has to know the PTY is actually there.
-  fitAddon.fit();
+  { const d = fitAddon.proposeDimensions && fitAddon.proposeDimensions();
+    if (d && d.cols >= MIN_COLS && d.rows >= MIN_ROWS) fitAddon.fit(); }
   pane.spawned = window.api.spawn({
     id, cols: term.cols || 80, rows: term.rows || 24,
     // opts.cwd wins so a recovered session reopens in the directory it was in.
