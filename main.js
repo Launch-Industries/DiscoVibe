@@ -20,6 +20,19 @@ if (!app.isPackaged && !process.argv.some((a) => a.startsWith('--user-data-dir')
 
 function loginShell() { return process.env.SHELL || '/bin/zsh'; }
 
+// The environment a pane's shell starts with. Launched through `npm run`, the
+// app inherits npm's own variables (npm_config_prefix and friends), and every
+// pane then printed nvm's "not compatible with npm_config_prefix" error on
+// start. They describe the npm process that launched us, not the user's shell,
+// so leave them out.
+function shellEnv() {
+  const env = { ...process.env };
+  for (const k of Object.keys(env)) {
+    if (/^npm_/i.test(k) || k === 'INIT_CWD' || k === 'NODE') delete env[k];
+  }
+  return env;
+}
+
 // Map of paneId -> pty process (ids are globally unique across all windows)
 const ptys = new Map();
 // All open TileTerm windows
@@ -934,7 +947,7 @@ ipcMain.handle('pty-spawn', (event, opts = {}) => {
       // TERM_PROGRAM overridden so zsh's Apple-Terminal update_terminal_cwd hook
       // doesn't try to write to a file descriptor only Terminal.app provides
       // (otherwise: "update_terminal_cwd: bad file descriptor").
-      env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'xterm-256color', TERM_PROGRAM_VERSION: '' }
+      env: { ...shellEnv(), TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'xterm-256color', TERM_PROGRAM_VERSION: '' }
     });
   } catch (err) {
     return { ok: false, error: String(err && err.message ? err.message : err) };

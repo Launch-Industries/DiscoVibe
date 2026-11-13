@@ -311,7 +311,10 @@ body.dim-inactive .pane:not(.focused) .pane-body { filter: brightness(var(--dim-
 }
 .pane.focused { box-shadow: 0 0 0 1px var(--accent), 0 6px 20px rgba(0,0,0,.45); }
 .pane.dragging { opacity: .45; }
-.pane.drop-target { outline: 3px dashed var(--accent); outline-offset: -3px; }
+.reorder-bar {
+  display: none; position: fixed; width: 4px; border-radius: 2px; z-index: 50;
+  background: var(--accent); box-shadow: 0 0 10px var(--accent); pointer-events: none;
+}
 .pane.file-drop { outline: 3px dashed #FFD100; outline-offset: -3px; box-shadow: inset 0 0 0 9999px rgba(255,209,0,.08); }
 
 .pane-header {
@@ -352,6 +355,16 @@ body.dim-inactive .pane:not(.focused) .pane-body { filter: brightness(var(--dim-
   background: rgba(127,127,127,.28); border: 1px solid currentColor;
 }
 .model-badge.show { display: inline-block; }
+
+/* Claude session id in the header; click copies the full id */
+.session-badge {
+  display: none; flex: 0 0 auto; cursor: pointer; color: inherit;
+  font: 600 11px ui-monospace, "SF Mono", Menlo, monospace; letter-spacing: .3px;
+  padding: 1px 7px; border-radius: 10px; border: 0;
+  background: rgba(127,127,127,.28);
+}
+.session-badge:hover { background: rgba(127,127,127,.45); }
+.session-badge.show { display: inline-block; }
 
 .pane-btn {
   appearance: none; border: none; background: rgba(127,127,127,.18); color: inherit;

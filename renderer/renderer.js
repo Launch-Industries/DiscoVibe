@@ -40,6 +40,7 @@ const settings = {
   showModel: true,           // show the detected AI model (Opus/Sonnet/…) in the header
   alertFocused: true,        // also alert the pane you're working in when it waits on a prompt
   resumeOnOpen: true,        // reopening the window resumes each pane's own Claude conversation
+  autoStartClaude: false,    // a brand-new terminal types `claude` for you
   consolidateOnLaunch: true, // offer to sort terminals into one window per repo when they are mixed
   closeoutCommand: ''        // '' = detected (/closeout when ~/.claude has one)
 };
@@ -808,6 +809,20 @@ function createPane(opts = {}) {
   aiNameEl.insertAdjacentElement('afterend', modelBadge);
   pane.modelBadge = modelBadge;
 
+  // Claude session id (short form) next to the name. Click copies the full id.
+  const sessionBadge = document.createElement('button');
+  sessionBadge.className = 'session-badge';
+  modelBadge.insertAdjacentElement('afterend', sessionBadge);
+  pane.sessionBadge = sessionBadge;
+  sessionBadge.addEventListener('mousedown', (e) => e.stopPropagation());
+  sessionBadge.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!pane.aiSessionId) return;
+    navigator.clipboard.writeText(pane.aiSessionId).catch(() => {});
+    flashMsg('Session ID copied: ' + pane.aiSessionId);
+  });
+  updateSessionBadge(pane);
+
   // Per-window note ("what I'm working on") — saved with the session
   noteBtn.classList.toggle('has-note', !!pane.note);
   noteBtn.addEventListener('click', () => openNotePopover(pane, noteBtn));
@@ -828,27 +843,18 @@ function createPane(opts = {}) {
   collapseBtn.addEventListener('click', () => collapsePane(pane));
   closeBtn.addEventListener('click', (e) => { if (e.altKey) closeForGood(pane); else closePane(id); });
 
-  // Drag to reorder (via grip)
+  // Drag to reorder (via grip). The drop itself is handled once, on the grid:
+  // see "Pane reorder" below.
   grip.addEventListener('dragstart', (e) => {
     dragSrcId = id; node.classList.add('dragging');
     e.dataTransfer.effectAllowed = 'move';
-    try { e.dataTransfer.setData('text/plain', id); } catch (_) {}
+    // A private type, not text/plain: dropped on a text field (xterm's hidden
+    // textarea included) text/plain would type the pane id.
+    try { e.dataTransfer.setData(PANE_DRAG_TYPE, id); } catch (_) {}
   });
   grip.addEventListener('dragend', () => {
     dragSrcId = null; node.classList.remove('dragging');
-    document.querySelectorAll('.pane.drop-target').forEach((el) => el.classList.remove('drop-target'));
-  });
-  node.addEventListener('dragover', (e) => { if (dragSrcId && dragSrcId !== id) { e.preventDefault(); node.classList.add('drop-target'); } });
-  node.addEventListener('dragleave', () => node.classList.remove('drop-target'));
-  node.addEventListener('drop', (e) => {
-    e.preventDefault(); node.classList.remove('drop-target');
-    if (!dragSrcId || dragSrcId === id) return;
-    const from = panes.findIndex((p) => p.id === dragSrcId);
-    const to = panes.findIndex((p) => p.id === id);
-    if (from < 0 || to < 0) return;
-    const [moved] = panes.splice(from, 1);
-    panes.splice(to, 0, moved);
-    relayout(); scheduleSave();
+    clearReorderMarker();
   });
 
   // Refit on size changes
@@ -877,7 +883,75 @@ function createPane(opts = {}) {
   return pane;
 }
 
+// ===========================================================================
+// Pane reorder
+// ===========================================================================
+// The whole grid is the drop zone, gaps included. Releasing over the gap
+// between panes, or over a pane's header, used to do nothing, and the outline
+// flickered off as the pointer crossed a pane's inner elements, so it took
+// several tries to land a pane. Now the nearest pane is the target, its left
+// or right half says "before" or "after", and a bar in the gap shows exactly
+// where the pane will go before you let go.
 let dragSrcId = null;
+const PANE_DRAG_TYPE = 'application/x-discovibe-pane';
+let reorderTarget = null;            // { id, after }
+const reorderBar = document.createElement('div');
+reorderBar.className = 'reorder-bar';
+document.body.appendChild(reorderBar);
+
+function clearReorderMarker() {
+  reorderTarget = null;
+  reorderBar.style.display = 'none';
+}
+
+// The pane under the pointer, or failing that the nearest one.
+function reorderTargetAt(x, y) {
+  let best = null, bestD = Infinity;
+  for (const p of panes) {
+    const r = p.el.getBoundingClientRect();
+    if (!r.width || !r.height) continue;
+    const dx = x < r.left ? r.left - x : x > r.right ? x - r.right : 0;
+    const dy = y < r.top ? r.top - y : y > r.bottom ? y - r.bottom : 0;
+    const d = dx * dx + dy * dy;
+    if (d < bestD) { bestD = d; best = { pane: p, r }; }
+  }
+  if (!best) return null;
+  return { id: best.pane.id, after: x > best.r.left + best.r.width / 2, r: best.r };
+}
+
+gridEl.addEventListener('dragover', (e) => {
+  if (!dragSrcId) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  const t = reorderTargetAt(e.clientX, e.clientY);
+  if (!t || t.id === dragSrcId) { clearReorderMarker(); return; }
+  // Dropping right beside itself would leave the order unchanged: show nothing.
+  const src = panes.findIndex((p) => p.id === dragSrcId);
+  const tgt = panes.findIndex((p) => p.id === t.id);
+  if ((t.after && tgt === src - 1) || (!t.after && tgt === src + 1)) { clearReorderMarker(); return; }
+  reorderTarget = { id: t.id, after: t.after };
+  const x = t.after ? t.r.right + 3 : t.r.left - 3;     // centred in the 6px gap
+  Object.assign(reorderBar.style, {
+    display: 'block', left: (x - 2) + 'px', top: t.r.top + 'px', height: t.r.height + 'px'
+  });
+});
+gridEl.addEventListener('dragleave', (e) => {
+  if (dragSrcId && !gridEl.contains(e.relatedTarget)) clearReorderMarker();
+});
+gridEl.addEventListener('drop', (e) => {
+  if (!dragSrcId) return;
+  e.preventDefault();
+  const t = reorderTarget;
+  clearReorderMarker();
+  if (!t || t.id === dragSrcId) return;
+  const from = panes.findIndex((p) => p.id === dragSrcId);
+  if (from < 0) return;
+  const [moved] = panes.splice(from, 1);
+  const to = panes.findIndex((p) => p.id === t.id);
+  if (to < 0) { panes.splice(from, 0, moved); return; }
+  panes.splice(t.after ? to + 1 : to, 0, moved);
+  relayout(); scheduleSave();
+});
 
 function addPane(opts) {
   ensureAudio();
@@ -897,7 +971,7 @@ function addMany(n) {
   const count = Math.max(0, Math.min(n, room));
   if (count <= 0) { flashCap(); return; }
   let last = null;
-  for (let i = 0; i < count; i++) { const p = createPane(); if (p) last = p; }
+  for (let i = 0; i < count; i++) { const p = createPane(); if (p) { last = p; startClaudeIn(p); } }
   relayout();
   if (last) { setFocused(last.id); setTimeout(() => last.term.focus(), 30); }
   scheduleSave();
@@ -1456,6 +1530,18 @@ async function runResume(pane) {
 }
 
 // Type a command into a pane and run it, or in a dry run, show it instead.
+// "Start Claude in new terminals": a brand-new, empty terminal types `claude`
+// for you. Only fresh panes: a restored or reopened pane resumes its own
+// conversation instead (resumeOnOpen), and typing a second `claude` there
+// would start an unrelated one.
+async function startClaudeIn(pane) {
+  if (!pane || !settings.autoStartClaude) return;
+  let ok = false;
+  try { ok = await pane.spawned; } catch (_) {}
+  if (!ok) return;
+  setTimeout(() => typeCommand(pane, 'claude'), 250);   // let the shell print its prompt first
+}
+
 function typeCommand(pane, cmd) {
   if (DRY_RUN) { pane.term.writeln('\r\n\x1b[33m[dry run] would type: ' + cmd + '\x1b[0m'); return; }
   window.api.input(pane.id, cmd + '\r');
@@ -1584,8 +1670,22 @@ setInterval(() => {
     const tool = detectTool(p);
     if (tool && !p.detectedTool) p.detectedTool = tool;
   }
-  claimClaudeSessions();
+  claimClaudeSessions().then(() => panes.forEach(updateSessionBadge));
 }, 4000);
+
+// Show the short session id only once it is known, not guessed: proved by the
+// pane's own output (locked) or matched on Claude's title (titled). A guessed id
+// can name someone else's conversation, and showing it would invite pasting the
+// wrong one.
+function updateSessionBadge(pane) {
+  const b = pane.sessionBadge;
+  if (!b) return;
+  const sure = pane.aiSessionId && (pane.aiSessionLocked || pane.aiSessionTitled);
+  const short = sure ? pane.aiSessionId.slice(0, 8) : '';
+  if (b.textContent !== short) b.textContent = short;
+  b.title = sure ? `Claude session ${pane.aiSessionId}. Click to copy.` : '';
+  b.classList.toggle('show', !!sure);
+}
 
 // Bind each Claude pane to one specific conversation file.
 //
@@ -1774,6 +1874,7 @@ function openPreferences() {
   const rNote = document.createElement('div'); rNote.className = 'layout-empty';
   rNote.textContent = 'Each restored pane runs claude --resume on its own conversation, a second or so apart. Off = a Resume button per pane instead. ⌘⇧O runs it by hand.';
   card.appendChild(rNote);
+  card.appendChild(checkRow('Start Claude in new terminals', () => !!settings.autoStartClaude, (v) => { settings.autoStartClaude = v; settingsChanged(); }));
   card.appendChild(checkRow('Sort terminals into one window per repo on launch', () => settings.consolidateOnLaunch !== false, (v) => { settings.consolidateOnLaunch = v; settingsChanged(); }));
   card.appendChild(textRow('Close-out command', () => settings.closeoutCommand, (v) => { settings.closeoutCommand = v.trim(); saveGlobals(); }, 'detected: /closeout if ~/.claude has one'));
   const cNote = document.createElement('div'); cNote.className = 'layout-empty';
@@ -2759,7 +2860,7 @@ function applyNamedLayout(name) {
   restoreConfigs(layout.panes || []);
 }
 function restoreConfigs(list) {
-  if (!list.length) { addPane(); return; }
+  if (!list.length) { startClaudeIn(addPane()); return; }
   list.forEach((cfg) => {
     try {
       const p = createPane(cfg);
@@ -2767,7 +2868,7 @@ function restoreConfigs(list) {
     } catch (err) { console.log('restore pane failed:', err && err.message); }
   });
   // If restore produced nothing usable, fall back to a fresh pane rather than a blank window.
-  if (!panes.length && !stored.length) addPane();
+  if (!panes.length && !stored.length) startClaudeIn(addPane());
   applyGlobalTitleSize(globalTitleSize, true);
   relayout();
   const first = panes[0];
@@ -3177,7 +3278,7 @@ function selectAllFocused(includeScrollback) {
 }
 
 window.api.onMenu((action) => {
-  if (action === 'new-terminal') addPane();
+  if (action === 'new-terminal') startClaudeIn(addPane());
   else if (action === 'copy') copyFocusedSelection();
   else if (action === 'select-all') selectAllFocused(false);
   else if (action === 'select-all-scrollback') selectAllFocused(true);
@@ -3664,7 +3765,7 @@ async function runCloseoutQueue() {
     if (ROLE === 'primary') window.api.openBootGate();
     const s = loadSession();
     if (s && Array.isArray(s.panes) && s.panes.length) restoreConfigs(s.panes);
-    else addPane();
+    else startClaudeIn(addPane());
     initWindowName();
   })();
   updateDisplayReadout();
