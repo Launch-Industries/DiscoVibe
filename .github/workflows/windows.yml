@@ -1,0 +1,49 @@
+# Builds the Windows installer (DiscoVibe-Setup-<version>.exe) on a Windows
+# runner and attaches it to the GitHub release. node-pty is a native module and
+# has to be compiled on Windows, which is why this cannot be built on the Mac.
+#
+# Run it: Actions > Windows build > Run workflow, with the release tag
+# (e.g. v1.11.0). It also runs by itself when a release is published.
+# Unsigned: Windows SmartScreen shows "Windows protected your PC" on first run
+# (More info > Run anyway) until a Windows code-signing certificate is added.
+name: Windows build
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to attach the installer to (e.g. v1.11.0)
+        required: true
+  release:
+    types: [published]
+permissions:
+  contents: write
+jobs:
+  windows:
+    runs-on: windows-latest
+    env:
+      TAG: ${{ github.event.inputs.tag || github.event.release.tag_name }}
+    steps:
+      # The branch the run was started from (main), or the tag when a
+      # release is published: the Windows support lives on main.
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install (compiles node-pty for Electron on Windows)
+        run: npm ci
+      - name: Build installer
+        run: npx electron-builder --win nsis --x64 --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: discovibe-windows
+          path: |
+            dist/*.exe
+            dist/latest.yml
+            dist/*.blockmap
+      - name: Attach to the GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$TAG" dist/*.exe dist/*.blockmap dist/latest.yml --clobber
