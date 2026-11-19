@@ -52,7 +52,9 @@ function readWindows() {
 }
 
 function defaultShell() {
-  if (os.platform() === 'win32') return process.env.COMSPEC || 'powershell.exe';
+  // PowerShell, not COMSPEC (cmd.exe): Claude Code and most CLI tools expect
+  // a modern shell on Windows (2026-11-19, first Windows build).
+  if (os.platform() === 'win32') return 'powershell.exe';
   return process.env.SHELL || '/bin/zsh';
 }
 
@@ -1015,7 +1017,9 @@ ipcMain.handle('get-displays', () => describeDisplays());
 // Run a usage command (e.g. ccusage) and return its output for the usage bar.
 ipcMain.handle('run-usage', (_e, { command }) => new Promise((resolve) => {
   if (!command) return resolve({ ok: false });
-  const p = spawn(loginShell(), ['-lc', command], { timeout: 15000 });
+  const p = os.platform() === 'win32'
+    ? spawn('powershell.exe', ['-NoProfile', '-Command', command], { timeout: 15000 })
+    : spawn(loginShell(), ['-lc', command], { timeout: 15000 });
   let out = '', err = '';
   p.stdout.on('data', (d) => { out += d.toString(); });
   p.stderr.on('data', (d) => { err += d.toString(); });
